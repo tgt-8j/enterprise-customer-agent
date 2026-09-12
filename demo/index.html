@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>企业客服 Agent Demo</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-light: #dbeafe;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --text: #1e293b;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --user-bg: #2563eb;
+      --user-fg: #ffffff;
+      --agent-bg: #f1f5f9;
+      --agent-fg: #1e293b;
+      --error: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .header h1 { font-size: 18px; font-weight: 600; }
+    .header .badge {
+      font-size: 12px;
+      background: var(--primary-light);
+      color: var(--primary);
+      padding: 2px 8px;
+      border-radius: 12px;
+      margin-left: 8px;
+    }
+    .api-config { display: flex; gap: 8px; align-items: center; }
+    .api-config input {
+      width: 280px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .api-config button {
+      padding: 6px 14px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .api-config button:hover { background: #1d4ed8; }
+
+    .chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 75%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      color: var(--user-fg);
+      border-bottom-right-radius: 4px;
+    }
+    .msg.agent {
+      align-self: flex-start;
+      background: var(--agent-bg);
+      color: var(--agent-fg);
+      border-bottom-left-radius: 4px;
+    }
+    .msg .meta { font-size: 11px; margin-top: 6px; opacity: 0.6; }
+    .msg .trace {
+      margin-top: 6px;
+      font-size: 12px;
+      background: rgba(0,0,0,0.06);
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .msg .trace div { margin: 2px 0; }
+    .msg .trace code {
+      background: rgba(0,0,0,0.1);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+    .typing {
+      align-self: flex-start;
+      padding: 10px 14px;
+      background: var(--agent-bg);
+      border-radius: 12px;
+      border-bottom-left-radius: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .typing::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+    @keyframes dots {
+      0%,20% { content: '.'; }
+      40% { content: '..'; }
+      60%,100% { content: '...'; }
+    }
+
+    .quick-prompts {
+      padding: 8px 24px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .quick-prompts button {
+      padding: 4px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      font-size: 12px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .quick-prompts button:hover {
+      background: var(--primary-light);
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .input-area {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      padding: 12px 24px;
+      display: flex;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .input-area textarea {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      resize: none;
+      height: 48px;
+      font-family: inherit;
+      line-height: 1.4;
+    }
+    .input-area textarea:focus { outline: 2px solid var(--primary); border-color: transparent; }
+    .input-area button {
+      padding: 0 20px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .input-area button:hover { background: #1d4ed8; }
+    .input-area button:disabled { background: var(--muted); cursor: not-allowed; }
+
+    .error-bar {
+      background: #fef2f2;
+      color: var(--error);
+      padding: 8px 24px;
+      font-size: 13px;
+      display: none;
+    }
+    .status-bar {
+      background: #f0fdf4;
+      color: #16a34a;
+      padding: 6px 24px;
+      font-size: 12px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>🤖 企业客服 Agent <span class="badge">LangGraph + RAG</span></h1>
+    <div class="api-config">
+      <input id="api-url" type="text" placeholder="API 地址，如 http://localhost:8000" value="http://localhost:8000" />
+      <button onclick="connectAPI()">连接</button>
+    </div>
+  </div>
+
+  <div class="status-bar" id="status-bar"></div>
+  <div class="error-bar" id="error-bar"></div>
+
+  <div class="chat-container" id="chat-container">
+    <div class="msg agent">
+      你好！我是企业客服 Agent，可以帮你：
+      <br>• 查询订单状态和物流信息
+      <br>• 解答退换货、发票等政策问题
+      <br>• 为异常订单创建人工工单
+      <br><br>请输入你的问题，或点击下方快捷示例 👇
+      <div class="meta">Agent · 随时待命</div>
+    </div>
+  </div>
+
+  <div class="quick-prompts">
+    <button onclick="sendPrompt('帮我查一下订单12345')">查订单12345</button>
+    <button onclick="sendPrompt('订单9527的物流怎么没更新，帮我建个工单')">查物流并建工单</button>
+    <button onclick="sendPrompt('质量问题退货要多久内申请？')">退货时限</button>
+    <button onclick="sendPrompt('7天无理由能退吗？')">七天无理由</button>
+    <button onclick="sendPrompt('怎么开发票？')">开发票</button>
+    <button onclick="sendPrompt('我的快递到哪了？')">查物流（无订单号）</button>
+  </div>
+
+  <div class="input-area">
+    <textarea id="user-input" placeholder="输入你的问题…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+    <button id="send-btn" onclick="sendMessage()">发送</button>
+  </div>
+
+<script>
+let sessionId = null;
+let token = null;
+let apiUrl = 'http://localhost:8000';
+let isProcessing = false;
+
+async function setStatus(msg, type) {
+  const bar = document.getElementById('status-bar');
+  const err = document.getElementById('error-bar');
+  err.style.display = 'none';
+  if (!msg) { bar.style.display = 'none'; return; }
+  bar.textContent = msg;
+  bar.style.background = type === 'error' ? '#fef2f2' : '#f0fdf4';
+  bar.style.color = type === 'error' ? '#ef4444' : '#16a34a';
+  bar.style.display = 'block';
+}
+
+async function registerOrLogin() {
+  const email = 'demo@example.com';
+  const password = 'demo123456';
+  try {
+    const loginRes = await fetch(apiUrl + '/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (loginRes.ok) {
+      const data = await loginRes.json();
+      token = data.access_token;
+      return;
+    }
+    const regRes = await fetch(apiUrl + '/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, name: 'Demo User' }),
+    });
+    if (!regRes.ok) throw new Error('注册失败: HTTP ' + regRes.status);
+    const data = await regRes.json();
+    token = data.access_token;
+  } catch (e) {
+    throw new Error('认证失败：' + e.message + '，请先确保后端服务已启动');
+  }
+}
+
+async function connectAPI() {
+  apiUrl = document.getElementById('api-url').value.trim().replace(/\/$/, '');
+  sessionId = null;
+  token = null;
+  document.getElementById('chat-container').innerHTML =
+    '<div class="msg agent">正在连接到 <strong>' + escapeHtml(apiUrl) + '</strong>…<div class="meta">准备中</div></div>';
+  try {
+    await registerOrLogin();
+    sessionId = crypto.randomUUID();
+    setStatus('✅ 已连接，会话已就绪', 'ok');
+    document.getElementById('chat-container').innerHTML =
+      '<div class="msg agent">连接成功！我是企业客服 Agent，请提问或点快捷示例 👇<div class="meta">Agent · 已认证</div></div>';
+  } catch (e) {
+    setStatus('⚠️ ' + e.message, 'error');
+  }
+}
+
+async function sendMessage() {
+  const input = document.getElementById('user-input');
+  const text = input.value.trim();
+  if (!text || isProcessing) return;
+  input.value = '';
+  appendMsg('user', text);
+  isProcessing = true;
+  document.getElementById('send-btn').disabled = true;
+  const typing = appendTyping();
+  try {
+    const body = { message: text, session_id: sessionId };
+    const opts = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    };
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+    const res = await fetch(apiUrl + '/chat', opts);
+    typing.remove();
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 200));
+    }
+    const data = await res.json();
+    sessionId = data.session_id;
+    appendMsg('agent', data.reply, data.tool_calls || []);
+  } catch (e) {
+    typing.remove();
+    appendMsg('agent', '❌ 请求失败：' + e.message, []);
+  } finally {
+    isProcessing = false;
+    document.getElementById('send-btn').disabled = false;
+  }
+}
+
+function sendPrompt(text) {
+  document.getElementById('user-input').value = text;
+  sendMessage();
+}
+
+function appendMsg(role, content, toolCalls) {
+  const container = document.getElementById('chat-container');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  let traceHtml = '';
+  if (toolCalls && toolCalls.length > 0) {
+    const lines = toolCalls.map(t => {
+      const args = JSON.stringify(t.tool_input || {}).slice(0, 80);
+      const out = (t.tool_output || '').slice(0, 100);
+      return '<div><code>' + escapeHtml(t.tool_name) + '</code>(' + escapeHtml(args) + ') → ' + escapeHtml(out) + '</div>';
+    }).join('');
+    traceHtml = '<div class="trace">' + lines + '</div>';
+  }
+  div.innerHTML = escapeHtml(content) + traceHtml +
+    '<div class="meta">' + (role === 'user' ? '你' : 'Agent') + ' · ' +
+    new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + '</div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+function appendTyping() {
+  const container = document.getElementById('chat-container');
+  const div = document.createElement('div');
+  div.className = 'typing';
+  div.textContent = 'Agent 正在思考';
+  container.appendChild(div);
+  container.scrollTop = container.scrollTop;
+  return div;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+window.addEventListener('DOMContentLoaded', () => connectAPI());
+</script>
+</body>
+</html>
