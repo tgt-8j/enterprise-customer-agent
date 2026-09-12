@@ -46,6 +46,27 @@ python scripts/seed_data.py
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## 环境变量配置
+
+复制 `.env.example` 为 `.env`，填入以下关键配置：
+
+| 变量 | 说明 | 必填 |
+|------|------|------|
+| `LLM_API_KEY` | 大模型 API Key（智谱/DeepSeek 等） | ✅ |
+| `LLM_BASE_URL` | OpenAI 兼容接口地址，留空走官方 | ❌ |
+| `LLM_MODEL_NAME` | 模型名，默认 `qwen-plus` | ❌ |
+| `EMBEDDING_API_KEY` | Embedding API Key，可复用 LLM_API_KEY | ❌ |
+| `EMBEDDING_BASE_URL` | Embedding 接口地址，可复用 LLM_BASE_URL | ❌ |
+| `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符 | ✅ |
+| `DATABASE_URL` | PostgreSQL 连接串，默认 `postgresql+asyncpg://postgres:postgres@localhost:5433/agent_demo` | ❌ |
+
+JWT_SECRET_KEY 生成方式：
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+完整配置项见 `.env.example`。
+
 ## 核心架构
 
 ```
