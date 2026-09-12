@@ -69,16 +69,19 @@ class TestEmbedTexts:
         mock_response.status_code = 200
         mock_response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 10}]}
 
-        with patch("rag.EMBEDDING_BASE_URL", "http://test"):
-            with patch("rag.EMBEDDING_API_KEY", "test_key"):
-                with patch("httpx.post", return_value=mock_response) as mock_post:
-                    vectors = embed_texts(["test"])
-                    assert len(vectors) == 1
-                    assert len(vectors[0]) == 10
-                    # 验证请求参数
-                    call_args = mock_post.call_args
-                    assert call_args.kwargs["json"]["model"] == "text-embedding-v3"
-                    assert call_args.kwargs["json"]["dimensions"] == 1024
+        with (
+            patch("rag.EMBEDDING_BASE_URL", "http://test"),
+            patch("rag.EMBEDDING_API_KEY", "test_key"),
+            patch("rag.EMBEDDING_MODEL_NAME", "embedding-3"),
+        ):
+            with patch("httpx.post", return_value=mock_response) as mock_post:
+                vectors = embed_texts(["test"])
+                assert len(vectors) == 1
+                assert len(vectors[0]) == 10
+                # 验证请求参数
+                call_args = mock_post.call_args
+                assert call_args.kwargs["json"]["model"] == "embedding-3"
+                assert call_args.kwargs["json"]["dimensions"] == 1024
 
     def test_embed_texts_missing_config(self):
         """缺少配置时抛出 RuntimeError。"""
