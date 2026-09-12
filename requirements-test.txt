@@ -1,0 +1,8 @@
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+httpx>=0.25.0
+ruff>=0.1.0
+mypy>=1.0.0
+pytest-factoryboy  # 可选：用于更复杂的 fixture 管理

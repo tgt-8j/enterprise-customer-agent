@@ -1,0 +1,78 @@
+# 本地开发 & 预发布部署（docker-compose）
+#
+# 三个服务：
+#   app      - AI Agent 主服务
+#   postgres - PostgreSQL 数据库
+#   chroma   - ChromaDB 向量数据库
+#
+# 启动：docker compose up -d
+# 停止：docker compose down
+# 重建：docker compose up -d --build
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHON_ENV=${PYTHON_ENV:-dev}
+      # PostgreSQL 连接走容器网络，主机名是 postgres
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-agent_demo}
+      # ChromaDB 用持久化卷，数据在容器重启后保留
+      - CHROMA_DIR=/opt/app/chroma_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chroma:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    volumes:
+      # 挂载 knowledge/ 目录，修改文档后无需重建镜像
+      - ./knowledge:/opt/app/knowledge:ro
+      # 日志持久化到宿主机
+      - app_logs:/opt/app/logs
+    networks:
+      - agent-net
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-agent_demo}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-agent_demo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent-net
+
+  chroma:
+    image: chromadb/chroma:latest
+    volumes:
+      - chroma_data:/chroma/chroma
+    networks:
+      - agent-net
+
+volumes:
+  postgres_data:
+  chroma_data:
+  app_logs:
+
+networks:
+  agent-net:
+    driver: bridge

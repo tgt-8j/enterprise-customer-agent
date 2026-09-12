@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+langgraph
+langchain
+langchain-openai
+python-dotenv
+chromadb
+httpx
+sqlalchemy[asyncpg]
+asyncpg
+# V7 企业级增强依赖
+pydantic-settings>=2.0.0          # 集中式配置管理
+PyJWT>=2.8.0                       # JWT token 签发与校验
+passlib[bcrypt]>=1.7.4             # 密码哈希（bcrypt）
+python-jose[cryptography]>=3.3.0   # JWT 编解码（备选方案）
+python-json-logger>=2.0.7          # JSON 结构化日志
+prometheus-client>=0.20.0          # Prometheus 指标
