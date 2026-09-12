@@ -9,6 +9,7 @@
 注意：这些测试需要 PostgreSQL 连接，由 conftest.py 中的 test_db_engine fixture 提供。
 如果本地没有 PostgreSQL，测试会被跳过。
 """
+
 import pytest
 
 
@@ -18,11 +19,16 @@ def _skip_if_no_db():
 
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
+
     try:
-        engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test")
+        engine = create_async_engine(
+            "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test"
+        )
+
         async def _check():
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
+
         asyncio.run(_check())
         return False
     except Exception:

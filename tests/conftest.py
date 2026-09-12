@@ -8,6 +8,7 @@
 - auth_headers：带有效 token 的请求头，用于需要认证的测试
 - test_user：测试用户，注册后立即返回 id，供其他 fixture 使用
 """
+
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -27,11 +28,14 @@ def _db_available() -> bool:
 
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
+
     try:
         engine = create_async_engine(TEST_DATABASE_URL)
+
         async def _check():
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
+
         asyncio.run(_check())
         return True
     except Exception:
@@ -64,9 +68,7 @@ async def db_session():
     async with engine.begin() as conn:
         await conn.run_sync(db.Base.metadata.create_all)
 
-    test_session_factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    test_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     original_engine = db.engine
     original_session_local = db.AsyncSessionLocal
     db.engine = engine

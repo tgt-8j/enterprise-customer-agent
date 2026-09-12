@@ -4,6 +4,7 @@
 如果数据库不可用，测试会被自动跳过（通过 pytest.mark.skipif）。
 CI 环境会通过 GitHub Actions service 容器自动提供 PostgreSQL。
 """
+
 import pytest
 
 import db
@@ -16,11 +17,16 @@ def _skip_if_no_db():
 
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
+
     try:
-        engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test")
+        engine = create_async_engine(
+            "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test"
+        )
+
         async def _check():
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
+
         asyncio.run(_check())
         return False
     except Exception:
@@ -34,7 +40,7 @@ def _skip_if_no_db():
 
 @pytest.mark.skipif(
     _skip_if_no_db(),
-    reason="PostgreSQL 未运行（localhost:5432），使用 docker-compose up -d postgres 启动"
+    reason="PostgreSQL 未运行（localhost:5432），使用 docker-compose up -d postgres 启动",
 )
 class TestUserModel:
     """User 表的增删改查。"""
@@ -93,16 +99,14 @@ class TestUserModel:
         assert user.role == "admin"
 
 
-@pytest.mark.skipif(
-    _skip_if_no_db(),
-    reason="PostgreSQL 未运行"
-)
+@pytest.mark.skipif(_skip_if_no_db(), reason="PostgreSQL 未运行")
 class TestHistoryWindow:
     """滑动窗口历史读取。"""
 
     @pytest.mark.asyncio
     async def test_load_history_returns_messages(self, db_session):
         import uuid
+
         session_id = f"test-hist-{uuid.uuid4().hex[:8]}"
         try:
             await db.save_message(session_id, "user", "你好")
@@ -120,6 +124,7 @@ class TestHistoryWindow:
     @pytest.mark.asyncio
     async def test_load_history_sliding_window(self, db_session):
         import uuid
+
         session_id = f"test-window-{uuid.uuid4().hex[:8]}"
         try:
             for i in range(10):
@@ -137,6 +142,7 @@ class TestHistoryWindow:
     @pytest.mark.asyncio
     async def test_clear_session(self, db_session):
         import uuid
+
         session_id = f"test-clear-{uuid.uuid4().hex[:8]}"
         try:
             for i in range(5):
@@ -150,10 +156,7 @@ class TestHistoryWindow:
             await db.clear_session(session_id)
 
 
-@pytest.mark.skipif(
-    _skip_if_no_db(),
-    reason="PostgreSQL 未运行"
-)
+@pytest.mark.skipif(_skip_if_no_db(), reason="PostgreSQL 未运行")
 class TestEnsureTables:
     """建表幂等性。"""
 

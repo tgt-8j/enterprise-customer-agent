@@ -1,19 +1,27 @@
 """项目环境检查 —— 运行: python scripts/check.py"""
-import asyncio, subprocess, sys
+
+import asyncio
+import subprocess
+import sys
 
 try:
-    import fastapi, langgraph, asyncpg, chromadb, sqlalchemy
+    import asyncpg
+    import chromadb
+
     print("依赖: OK")
 except ImportError as e:
-    print(f"依赖: 缺失 {e}"); sys.exit(1)
+    print(f"依赖: 缺失 {e}")
+    sys.exit(1)
+
 
 async def check_db():
-    conn = await asyncpg.connect(host="localhost", port=5432,
-                                  user="postgres", password="postgres",
-                                  database="agent_demo")
+    conn = await asyncpg.connect(
+        host="localhost", port=5432, user="postgres", password="postgres", database="agent_demo"
+    )
     cnt = await conn.fetchval("SELECT COUNT(*) FROM orders")
     await conn.close()
     return cnt
+
 
 try:
     cnt = asyncio.run(check_db())
@@ -27,6 +35,7 @@ try:
 except Exception:
     print("ChromaDB:   未建库 (运行 python scripts/build_kb.py)")
 
-r = subprocess.run([sys.executable, "-m", "pytest", "tests/", "-q", "--tb=no"],
-                   capture_output=True, timeout=60)
+r = subprocess.run(
+    [sys.executable, "-m", "pytest", "tests/", "-q", "--tb=no"], capture_output=True, timeout=60
+)
 print(r.stdout.decode().strip().split("\n")[-1])

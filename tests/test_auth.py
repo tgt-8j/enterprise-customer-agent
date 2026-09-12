@@ -6,6 +6,7 @@
 - token 黑名单
 - HTTP 认证端点（需要 PostgreSQL，自动跳过）
 """
+
 import pytest
 
 from auth import (
@@ -60,6 +61,7 @@ class TestTokenCreation:
 
     def test_custom_expires(self):
         from datetime import timedelta
+
         token = create_access_token(subject=1, expires_delta=timedelta(minutes=5))
         payload = decode_token(token)
         assert payload["exp"] is not None
@@ -86,11 +88,16 @@ def _db_available() -> bool:
 
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
+
     try:
-        engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test")
+        engine = create_async_engine(
+            "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test"
+        )
+
         async def _check():
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
+
         asyncio.run(_check())
         return True
     except Exception:
@@ -104,7 +111,7 @@ def _db_available() -> bool:
 
 @pytest.mark.skipif(
     not _db_available(),
-    reason="PostgreSQL 未运行（localhost:5432），使用 docker-compose up -d postgres 启动"
+    reason="PostgreSQL 未运行（localhost:5432），使用 docker-compose up -d postgres 启动",
 )
 class TestAuthEndpoints:
     """HTTP 认证端点集成测试。"""
@@ -120,43 +127,48 @@ class TestAuthEndpoints:
         assert "refresh_token" in data
 
     def test_login_success(self, client):
-        client.post("/api/auth/register", json={
-            "email": "login_test@example.com", "password": "login_pass_123", "name": "LT"
-        })
-        response = client.post("/api/auth/login", json={
-            "email": "login_test@example.com", "password": "login_pass_123"
-        })
+        client.post(
+            "/api/auth/register",
+            json={"email": "login_test@example.com", "password": "login_pass_123", "name": "LT"},
+        )
+        response = client.post(
+            "/api/auth/login",
+            json={"email": "login_test@example.com", "password": "login_pass_123"},
+        )
         assert response.status_code == 200
         assert "access_token" in response.json()
 
     def test_login_wrong_password(self, client):
-        client.post("/api/auth/register", json={
-            "email": "pw_test@example.com", "password": "correct_pass", "name": "PW"
-        })
-        response = client.post("/api/auth/login", json={
-            "email": "pw_test@example.com", "password": "wrong_pass"
-        })
+        client.post(
+            "/api/auth/register",
+            json={"email": "pw_test@example.com", "password": "correct_pass", "name": "PW"},
+        )
+        response = client.post(
+            "/api/auth/login", json={"email": "pw_test@example.com", "password": "wrong_pass"}
+        )
         assert response.status_code == 401
 
     def test_refresh_token(self, client):
-        client.post("/api/auth/register", json={
-            "email": "refresh@example.com", "password": "refresh_pass", "name": "RF"
-        })
-        login_resp = client.post("/api/auth/login", json={
-            "email": "refresh@example.com", "password": "refresh_pass"
-        })
+        client.post(
+            "/api/auth/register",
+            json={"email": "refresh@example.com", "password": "refresh_pass", "name": "RF"},
+        )
+        login_resp = client.post(
+            "/api/auth/login", json={"email": "refresh@example.com", "password": "refresh_pass"}
+        )
         refresh_token = login_resp.json()["refresh_token"]
         response = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
         assert response.status_code == 200
         assert "access_token" in response.json()
 
     def test_logout_blacklists_token(self, client):
-        client.post("/api/auth/register", json={
-            "email": "logout@example.com", "password": "logout_pass", "name": "LG"
-        })
-        login_resp = client.post("/api/auth/login", json={
-            "email": "logout@example.com", "password": "logout_pass"
-        })
+        client.post(
+            "/api/auth/register",
+            json={"email": "logout@example.com", "password": "logout_pass", "name": "LG"},
+        )
+        login_resp = client.post(
+            "/api/auth/login", json={"email": "logout@example.com", "password": "logout_pass"}
+        )
         token = login_resp.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
         client.post("/api/auth/logout", headers=headers)

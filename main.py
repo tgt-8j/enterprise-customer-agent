@@ -18,8 +18,8 @@ V7 增强：
 - Prometheus 指标：请求数、耗时、工具调用统计
 - 增强型 /health：检查 PostgreSQL 和 ChromaDB 连通性
 """
+
 import logging
-import os
 import time
 import uuid
 from pathlib import Path
@@ -76,6 +76,7 @@ def get_agent():
 
 # ---------- 请求/响应模型 ----------
 
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
@@ -117,6 +118,7 @@ class TokenResponse(BaseModel):
 
 # ---------- 中间件 ----------
 
+
 @app.middleware("http")
 async def logging_middleware(request: Request, call_next):
     """请求日志中间件：记录 request_id、method、path、status、耗时。"""
@@ -136,9 +138,7 @@ async def logging_middleware(request: Request, call_next):
     except Exception as e:
         duration = time.monotonic() - start
         HTTP_REQUEST_DURATION.labels(method=request.method, path=request.url.path).observe(duration)
-        HTTP_REQUESTS_TOTAL.labels(
-            method=request.method, path=request.url.path, status=500
-        ).inc()
+        HTTP_REQUESTS_TOTAL.labels(method=request.method, path=request.url.path, status=500).inc()
         logger.warning(
             "request_errored",
             extra={
@@ -154,9 +154,7 @@ async def logging_middleware(request: Request, call_next):
     duration = time.monotonic() - start
     status = response.status_code
     HTTP_REQUEST_DURATION.labels(method=request.method, path=request.url.path).observe(duration)
-    HTTP_REQUESTS_TOTAL.labels(
-        method=request.method, path=request.url.path, status=status
-    ).inc()
+    HTTP_REQUESTS_TOTAL.labels(method=request.method, path=request.url.path, status=status).inc()
 
     logger.info(
         "request_completed",
@@ -176,6 +174,7 @@ async def logging_middleware(request: Request, call_next):
 
 
 # ---------- 认证端点 ----------
+
 
 @app.post("/api/auth/register", response_model=TokenResponse)
 async def register(req: RegisterRequest):
@@ -235,6 +234,7 @@ async def refresh(req: RefreshRequest):
     # 验证用户仍然存在且活跃
     async with db.AsyncSessionLocal() as session:
         from sqlalchemy import select
+
         result = await session.execute(select(db.User).where(db.User.id == user_id))
         user = result.scalar_one_or_none()
     if not user or not user.is_active:
@@ -253,13 +253,14 @@ async def logout(request: Request):
     """注销：使当前 access token 失效。"""
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header[len("Bearer "):]
+        token = auth_header[len("Bearer ") :]
         blacklist_token(token)
         logger.info("用户注销，token 已加入黑名单")
     return {"detail": "已注销"}
 
 
 # ---------- 业务端点 ----------
+
 
 def history_to_messages(rows) -> list[AnyMessage]:
     """把 messages 表的行转成 LangChain 消息对象（多轮 messages 数组）。
@@ -357,6 +358,7 @@ async def delete_session(
 
 # ---------- 监控端点 ----------
 
+
 @app.get("/health")
 async def health():
     """增强型健康检查：验证 PostgreSQL 和 ChromaDB 连通性。
@@ -380,6 +382,7 @@ async def health():
     def check_chroma():
         try:
             from rag import get_collection
+
             coll = get_collection()
             return "ok" if coll is not None else "no_collection"
         except Exception as e:
@@ -400,6 +403,7 @@ async def health():
 async def metrics():
     """Prometheus 指标端点。由 Prometheus scraper 调用，不需要认证。"""
     from prometheus_client import generate_latest
+
     return Response(
         content=generate_latest(),
         media_type="text/plain; charset=utf-8",

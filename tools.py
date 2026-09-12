@@ -14,6 +14,7 @@ V7 增强：
 DB 阻塞不会卡住 FastAPI。search_knowledge 保持同步（rag.py 是同步实现），
 ToolNode 在异步路径下会自动把它放进线程池执行，同样不阻塞事件循环。
 """
+
 import json
 import logging
 import time
@@ -51,19 +52,25 @@ async def query_order(order_id: str) -> str:
             )
             return _dumps({"error": f"订单 {order_id} 不存在，请确认订单号是否正确"})
 
-        result = _dumps({
-            "order_id": order.order_id,
-            "user_id": order.user_id,
-            "status": order.status,
-            "logistics_status": order.logistics_status,
-            "logistics_detail": order.logistics_detail,
-            "created_at": order.created_at.isoformat() if order.created_at else None,
-        })
+        result = _dumps(
+            {
+                "order_id": order.order_id,
+                "user_id": order.user_id,
+                "status": order.status,
+                "logistics_status": order.logistics_status,
+                "logistics_detail": order.logistics_detail,
+                "created_at": order.created_at.isoformat() if order.created_at else None,
+            }
+        )
         elapsed_ms = (time.monotonic() - start) * 1000
         AGENT_TOOL_CALLS_TOTAL.labels(tool_name="query_order", result="success").inc()
         logger.info(
             "工具调用结束: query_order（成功）",
-            extra={"order_id": order_id, "status": order.status, "elapsed_ms": round(elapsed_ms, 1)},
+            extra={
+                "order_id": order_id,
+                "status": order.status,
+                "elapsed_ms": round(elapsed_ms, 1),
+            },
         )
         return result
     except Exception as e:  # 连不上库 / 建表失败等：服务不崩，给模型一个明确错误

@@ -15,6 +15,7 @@
 
 V7：保留原有测试逻辑，适配新的 config 模块。
 """
+
 import asyncio
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -42,11 +43,19 @@ def make_scripted_llm():
         ),
         AIMessage(
             content="",
-            tool_calls=[{"name": "search_knowledge", "args": {"query": "物流长时间不更新"}, "id": "call_2"}],
+            tool_calls=[
+                {"name": "search_knowledge", "args": {"query": "物流长时间不更新"}, "id": "call_2"}
+            ],
         ),
         AIMessage(
             content="",
-            tool_calls=[{"name": "create_ticket", "args": {"order_id": "9527", "reason": "物流异常超48小时未更新"}, "id": "call_3"}],
+            tool_calls=[
+                {
+                    "name": "create_ticket",
+                    "args": {"order_id": "9527", "reason": "物流异常超48小时未更新"},
+                    "id": "call_3",
+                }
+            ],
         ),
         AIMessage(
             content="已为您查询订单9527，物流在广州转运中心滞留超48小时，判定为物流异常，已为您创建工单 TK-XXXXXXXX，客服会尽快跟进处理。",
@@ -79,7 +88,11 @@ def test_full_loop():
     # 和 main.py 的生产路径保持一致（同步 invoke 已无法执行 async 工具）。
     result = run_async(
         agent.ainvoke(
-            {"messages": [HumanMessage(content="我的订单9527为什么还没发货，如果物流异常帮我创建工单")]}
+            {
+                "messages": [
+                    HumanMessage(content="我的订单9527为什么还没发货，如果物流异常帮我创建工单")
+                ]
+            }
         )
     )
 
@@ -94,6 +107,7 @@ def test_full_loop():
 
     # 断言2：三个工具确实都被依次调用了
     from langchain_core.messages import ToolMessage
+
     tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 3
     print(f"✅ 共执行了 {len(tool_messages)} 次工具调用，依次为:")

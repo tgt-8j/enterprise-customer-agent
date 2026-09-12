@@ -13,6 +13,7 @@
     logger = logging.getLogger(__name__)
     logger.info("something happened", extra={"key": "value"})
 """
+
 import logging
 import os
 import sys
@@ -41,9 +42,7 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO") -> None:
             fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
         )
     else:
-        formatter = logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
 
     # 文件 handler（轮转）
     file_handler = RotatingFileHandler(
@@ -68,4 +67,6 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO") -> None:
     for noisy in ["uvicorn.access", "chromadb", "httpx", "openai", "httpcore"]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    logging.getLogger(__name__).info("日志系统初始化完成", extra={"log_dir": log_dir, "level": level})
+    logging.getLogger(__name__).info(
+        "日志系统初始化完成", extra={"log_dir": log_dir, "level": level}
+    )

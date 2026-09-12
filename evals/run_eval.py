@@ -14,6 +14,7 @@ V7 自动化评测运行器：对 Agent 的工具选择、边界行为、多轮�
   会话历史用 eval- 前缀的独立 session_id，跑完自动清理，不污染正常数据。
 - 评测集与断言逻辑分离：加用例只改 cases.json。
 """
+
 import asyncio
 import json
 import os
@@ -206,9 +207,18 @@ async def main():
     result_file = os.path.join(RESULTS_DIR, f"eval_{stamp}.json")
     with open(result_file, "w", encoding="utf-8") as f:
         json.dump(
-            {"meta": {"time": stamp, "model": os.getenv("LLM_MODEL_NAME"), "total": total, "passed": passed},
-             "results": records},
-            f, ensure_ascii=False, indent=2,
+            {
+                "meta": {
+                    "time": stamp,
+                    "model": os.getenv("LLM_MODEL_NAME"),
+                    "total": total,
+                    "passed": passed,
+                },
+                "results": records,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
         )
     report_file = os.path.join(RESULTS_DIR, "latest_report.md")
     with open(report_file, "w", encoding="utf-8") as f:
@@ -225,16 +235,15 @@ async def main():
     # ---- 写库审计：新建工单报告 + 评测会话清理 ----
     async with db.AsyncSessionLocal() as session:
         new_tickets = (
-            (await session.execute(
-                select(db.Ticket).where(db.Ticket.ticket_id > baseline_ticket)
-            ))
-            .scalars().all()
+            (await session.execute(select(db.Ticket).where(db.Ticket.ticket_id > baseline_ticket)))
+            .scalars()
+            .all()
         )
     if new_tickets:
         print(f"\n⚠️ 本次评测新建了 {len(new_tickets)} 个工单：")
         for t in new_tickets:
             print(f"  ticket_id={t.ticket_id} order={t.order_id} reason={t.reason[:40]}")
-        print("  如需清理：DELETE FROM tickets WHERE ticket_id > %d;" % baseline_ticket)
+        print(f"  如需清理：DELETE FROM tickets WHERE ticket_id > {baseline_ticket};")
 
     session_ids = {r["session_id"] for r in records}
     deleted = 0

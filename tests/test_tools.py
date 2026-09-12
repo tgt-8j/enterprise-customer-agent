@@ -7,6 +7,7 @@
   这些是工具调用的核心逻辑。
 - tools.py 本身的测试通过 test_agent_legacy.py 中的集成测试覆盖。
 """
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -62,6 +63,7 @@ class TestSearchKnowledgeLogic:
     def test_search_knowledge_success(self):
         """模拟 RAG 检索成功。"""
         import rag
+
         with patch.object(rag, "search", return_value="退货政策：7天内可退") as mock_search:
             result = rag.search("退货政策")
             assert "7天" in result
@@ -70,7 +72,8 @@ class TestSearchKnowledgeLogic:
     def test_search_knowledge_not_found(self):
         """模拟 RAG 检索无结果。"""
         import rag
-        with patch.object(rag, "search", return_value="未找到相关信息") as mock_search:
+
+        with patch.object(rag, "search", return_value="未找到相关信息"):
             result = rag.search("太阳系行星数量")
             assert "未找到" in result
 

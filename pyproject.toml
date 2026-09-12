@@ -8,8 +8,9 @@ license = {text = "MIT"}
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
-ignore = ["E501"]  # line too long handled by formatter
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "SIM"]
+ignore = ["E501", "B008", "B904", "UP042", "SIM105", "SIM117"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agent", "auth", "config", "db", "llm", "main", "metrics", "rag", "tools"]

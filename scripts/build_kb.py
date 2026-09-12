@@ -6,6 +6,7 @@
 
 前置条件：.env 里配好 embedding 相关配置（默认用智谱 embedding-3）。
 """
+
 import os
 import sys
 

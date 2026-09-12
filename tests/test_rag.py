@@ -7,6 +7,7 @@
 
 不涉及真实的 embedding API 调用或 ChromaDB 写入。
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,7 @@ class TestChunkText:
     def test_short_text_single_chunk(self):
         """短文本不切分。"""
         from rag import chunk_text
+
         chunks = chunk_text("这是一段短文本", chunk_size=100)
         assert len(chunks) == 1
         assert chunks[0] == "这是一段短文本"
@@ -25,6 +27,7 @@ class TestChunkText:
     def test_long_text_splits(self):
         """长文本按 chunk_size 切分。"""
         from rag import chunk_text
+
         text = "段落一。\n\n段落二。\n\n段落三。" * 10
         chunks = chunk_text(text, chunk_size=20, overlap=5)
         assert len(chunks) > 1
@@ -35,6 +38,7 @@ class TestChunkText:
     def test_paragraph_aware_splitting(self):
         """按段落边界切分，不破坏语义。"""
         from rag import chunk_text
+
         text = "第一段内容。\n\n第二段内容。\n\n第三段内容。"
         chunks = chunk_text(text, chunk_size=50)
         # 应该按段落合并，而不是按字符硬切
@@ -43,6 +47,7 @@ class TestChunkText:
     def test_overlap_conservation(self):
         """重叠部分正确保留。"""
         from rag import chunk_text
+
         text = "A B C D E F G H I J"
         chunks = chunk_text(text, chunk_size=10, overlap=3)
         if len(chunks) > 1:
@@ -62,9 +67,7 @@ class TestEmbedTexts:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [{"index": 0, "embedding": [0.1] * 10}]
-        }
+        mock_response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 10}]}
 
         with patch("rag.EMBEDDING_BASE_URL", "http://test"):
             with patch("rag.EMBEDDING_API_KEY", "test_key"):

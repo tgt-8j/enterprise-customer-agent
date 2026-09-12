@@ -11,6 +11,7 @@ V7：新增 User 表（JWT 认证）；配置收口到 config.py。
 - 所有查询走 ORM（参数化），不存在 SQL 拼字符串。
 - V7：配置从 config.py 读取，类型安全、启动时校验。
 """
+
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -43,9 +44,7 @@ class Order(Base):
     status: Mapped[str] = mapped_column(String(32))
     logistics_status: Mapped[str] = mapped_column(String(32))
     logistics_detail: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Ticket(Base):
@@ -59,9 +58,7 @@ class Ticket(Base):
     )
     reason: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="待处理")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ChatMessage(Base):
@@ -77,9 +74,7 @@ class ChatMessage(Base):
     session_id: Mapped[str] = mapped_column(String(64), index=True)
     role: Mapped[str] = mapped_column(String(16))  # user / assistant
     content: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class User(Base):
@@ -97,9 +92,7 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(100))
     role: Mapped[str] = mapped_column(String(32), default="user")  # user / admin
     is_active: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # pool_pre_ping：每次取连接前先探活，PostgreSQL 重启后旧连接不会变成僵尸报错；
@@ -140,6 +133,7 @@ async def ensure_tables():
 
 # ---------- V7：用户管理 ----------
 
+
 async def get_user_by_email(email: str) -> User | None:
     """按邮箱查询用户（登录时用）。"""
     async with AsyncSessionLocal() as session:
@@ -158,6 +152,7 @@ async def create_user(email: str, password_hash: str, name: str, role: str = "us
 
 
 # ---------- V6：会话记忆读写 ----------
+
 
 async def load_history(session_id: str, limit: int | None = None) -> list[ChatMessage]:
     """取某会话最近 limit 条消息，按时间正序返回（滑动窗口）。

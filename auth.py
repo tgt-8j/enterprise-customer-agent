@@ -16,6 +16,7 @@
     async def chat(req: ChatRequest, user: db.User = Depends(get_current_user)):
         ...
 """
+
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -43,6 +44,7 @@ _access_token_blacklist: set[str] = set()
 
 # ---------- 密码操作 ----------
 
+
 def hash_password(password: str) -> str:
     """bcrypt 哈希：单向、加盐、可调成本。返回 Base64 编码的哈希字符串。"""
     salt = bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
@@ -59,6 +61,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 # ---------- Token 创建 ----------
+
 
 def create_access_token(
     subject: int,
@@ -86,12 +89,14 @@ def create_refresh_token(subject: int) -> str:
 def _encode(payload: dict) -> str:
     """内部编码工具：统一用 settings 里的密钥和算法。"""
     from jose import jwt
+
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
 def _decode(token: str) -> dict:
     """内部解码工具：统一处理签名和过期校验。"""
     from jose import jwt
+
     try:
         return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except Exception as e:
@@ -103,6 +108,7 @@ def _decode(token: str) -> dict:
 
 
 # ---------- 令牌管理 ----------
+
 
 def blacklist_token(token: str) -> None:
     """将 token 加入黑名单（注销时使用）。"""
@@ -121,6 +127,7 @@ def decode_token(token: str) -> dict:
 
 
 # ---------- FastAPI Depends ----------
+
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),

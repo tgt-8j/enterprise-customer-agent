@@ -17,6 +17,7 @@
   不要每次请求都 new 一个（会 OOM）。
 - 标签值用常量而不是变量，避免 cardinality 爆炸。
 """
+
 from prometheus_client import Counter, Histogram
 
 # ---------- HTTP 请求 ----------

@@ -16,6 +16,7 @@ create_react_agent 一行代码就能给你一个能用的 Agent，但面试官�
                 ├─ 有 → tools 节点 → 回到 agent 节点（循环）
                 └─ 没有 → END
 """
+
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AnyMessage
@@ -95,6 +96,7 @@ def build_agent(llm=None):
         # 第一次调用时，把 system prompt 插到最前面
         if not any(getattr(m, "type", None) == "system" for m in messages):
             from langchain_core.messages import SystemMessage
+
             messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
         response = llm_with_tools.invoke(messages)
         return {"messages": [response]}

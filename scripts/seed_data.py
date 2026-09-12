@@ -8,6 +8,7 @@
 
 前置条件：.env 里配好 DATABASE_URL，PostgreSQL 服务已启动。
 """
+
 import asyncio
 import os
 import sys

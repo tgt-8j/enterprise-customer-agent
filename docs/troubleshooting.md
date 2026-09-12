@@ -79,6 +79,8 @@ asyncio.run(db.engine.execute(text("SELECT 1")))  # ❌ 2.0 报错
 async def check():
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
+
+
 asyncio.run(check())  # ✅
 ```
 
@@ -147,15 +149,22 @@ AttributeError: module 'bcrypt' has no attribute '__about__'
 ```python
 # auth.py 修改前
 from passlib.context import CryptContext
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
 def hash_password(password):
     return pwd_context.hash(password)
 
+
 # auth.py 修改后
 import bcrypt
+
+
 def hash_password(password: str) -> str:
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(password.encode(), salt).decode()
+
 
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())

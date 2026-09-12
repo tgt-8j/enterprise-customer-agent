@@ -12,6 +12,7 @@ V7 增强：
 /chat/completions 接口，所以复用 langchain-openai 的 ChatOpenAI 客户端，
 换 base_url 就能接入，不需要为每个厂商单独写一套 LLM 封装。
 """
+
 from langchain_openai import ChatOpenAI
 
 from config import settings
@@ -30,9 +31,7 @@ def get_llm():
     防止 LLM 服务抖动时整个请求无限挂起。
     """
     if not settings.llm_api_key:
-        raise RuntimeError(
-            "没有找到 LLM_API_KEY，请复制 .env.example 为 .env 并填入你的真实 key"
-        )
+        raise RuntimeError("没有找到 LLM_API_KEY，请复制 .env.example 为 .env 并填入你的真实 key")
 
     return ChatOpenAI(
         api_key=settings.llm_api_key,

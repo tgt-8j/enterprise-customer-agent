@@ -9,6 +9,7 @@
   不同环境的差异通过继承 BaseSettings 实现，不用写 if/else 判断。
 - JWT_SECRET_KEY 等敏感字段在 .env 缺失时给出明确提示，而不是静默使用空值。
 """
+
 import os
 from functools import lru_cache
 from typing import Literal
@@ -52,16 +53,24 @@ class BaseConfig(BaseSettings):
     embedding_base_url: str = Field(
         default="", description="Embedding 接口地址，留空复用 LLM_BASE_URL"
     )
-    embedding_api_key: str = Field(default="", description="Embedding API Key，留空复用 LLM_API_KEY")
+    embedding_api_key: str = Field(
+        default="", description="Embedding API Key，留空复用 LLM_API_KEY"
+    )
     embedding_dimensions: int = Field(default=1024, ge=256, le=4096)
     embedding_similarity_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
-    embedding_failure_threshold: int = Field(default=3, ge=1, le=10, description="触发熔断的连续失败次数")
-    embedding_recovery_timeout: float = Field(default=30.0, ge=5.0, description="熔断恢复等待时间（秒）")
+    embedding_failure_threshold: int = Field(
+        default=3, ge=1, le=10, description="触发熔断的连续失败次数"
+    )
+    embedding_recovery_timeout: float = Field(
+        default=30.0, ge=5.0, description="熔断恢复等待时间（秒）"
+    )
 
     # ---------- JWT 认证 ----------
     # 注意：这里不强制 min_length，因为开发环境可能还没有 .env 文件。
     # 实际使用时会在 auth.py 中检查密钥是否有效。
-    jwt_secret_key: str = Field(default=_gen_fallback_secret(), description="JWT 签名密钥，至少 32 位")
+    jwt_secret_key: str = Field(
+        default=_gen_fallback_secret(), description="JWT 签名密钥，至少 32 位"
+    )
     jwt_algorithm: str = Field(default="HS256", description="JWT 签名算法")
     access_token_expire_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_expire_days: int = Field(default=7, ge=1, le=365)

@@ -25,6 +25,7 @@ V7 增强：
 线程池执行器（get_executor_for_config）来跑的，所以阻塞发生在工作线程里，
 不会卡住 FastAPI 的事件循环（详见 tools.py 里 search_knowledge 的注释）。
 """
+
 import logging
 import os
 import time
@@ -87,6 +88,7 @@ _collection_cache = None
 # 状态机：CLOSED -> (N次失败) -> OPEN -> (超时) -> HALF_OPEN -> (成功) -> CLOSED
 #                                                        -> (失败) -> OPEN
 
+
 class _CircuitState(str, Enum):
     CLOSED = "closed"
     OPEN = "open"
@@ -113,8 +115,7 @@ def _check_circuit():
         else:
             remaining = int(EMBEDDING_RECOVERY_TIMEOUT - elapsed)
             raise RuntimeError(
-                f"Embedding API 熔断器处于 OPEN 状态（服务可能宕机），"
-                f"还需等待 {remaining}s 后重试"
+                f"Embedding API 熔断器处于 OPEN 状态（服务可能宕机），还需等待 {remaining}s 后重试"
             )
 
 
@@ -208,7 +209,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
         # 单段超长的兜底：滑动窗口硬切
         while len(current) > chunk_size:
             chunks.append(current[:chunk_size])
-            current = current[chunk_size - overlap:]
+            current = current[chunk_size - overlap :]
     if current:
         chunks.append(current)
     return chunks
@@ -235,7 +236,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     # 分批调用：embedding 接口对单次输入条数有限制，千问限制 10 条一批
     batch_size = 10
     for start in range(0, len(texts), batch_size):
-        batch = texts[start:start + batch_size]
+        batch = texts[start : start + batch_size]
         try:
             resp = httpx.post(
                 url,
