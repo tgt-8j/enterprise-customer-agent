@@ -54,8 +54,4 @@ jobs:
           JWT_SECRET_KEY: test-secret-key-for-ci-must-be-at-least-32-chars-long!!!
           LLM_API_KEY: test-key
           PYTHON_ENV: dev
-        run: pytest tests/ -v --cov=. --cov-report=xml
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        if: always()
+        run: pytest tests/ -v --tb=short
