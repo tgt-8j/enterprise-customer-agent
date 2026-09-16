@@ -6,22 +6,25 @@ V7：企业级客服 Agent API（FastAPI）。
 - POST /api/auth/login     登录获取 tokens
 - POST /api/auth/refresh   用 refresh token 换新的 access token
 - POST /api/auth/logout    注销（使当前 token 失效）
-- POST /chat               发送消息，Agent 回复
+- POST /chat               发送消息，Agent 回复（阻塞式）
+- POST /chat_stream        发送消息，Agent 流式回复（SSE）
 - GET  /sessions/{session_id}/history  查看会话历史
 - DELETE /sessions/{session_id}       删除会话
 - GET  /health               健康检查（DB + ChromaDB 连通性）
 - GET  /metrics              Prometheus 指标
+- GET  /dispatch             意图分发调试端点
 
-V7 增强：
-- JWT 认证：所有业务端点需要 Bearer token，auth 端点不需要
-- 结构化日志：每个请求记录 request_id、method、path、status、duration_ms
-- Prometheus 指标：请求数、耗时、工具调用统计
-- 增强型 /health：检查 PostgreSQL 和 ChromaDB 连通性
+V8 增强：
+- SSE 流式输出：POST /chat_stream 实时返回 LLM token 和工具调用事件
+- 意图分发：根据用户输入自动路由到不同处理策略
+- MCP 工具集成：预留 MCP 协议接入接口，支持可扩展工具加载
 """
 
+import json
 import logging
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -29,9 +32,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 import db
-from agent import build_agent
+from agent import build_agent, get_tools_for_intent
 from auth import (
     blacklist_token,
     create_access_token,
@@ -41,6 +45,7 @@ from auth import (
     verify_password,
 )
 from config import settings
+from dispatch import classify_intent
 from logging_config import setup_logging
 from metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
 
@@ -67,10 +72,13 @@ if _DEMO_DIR.is_dir():
 _agent = None
 
 
-def get_agent():
+def get_agent(intent: str = "general"):
     global _agent
     if _agent is None:
-        _agent = build_agent()
+        import os
+
+        use_mcp = os.getenv("USE_MCP", "false").lower() == "true"
+        _agent = build_agent(intent=intent, use_mcp=use_mcp)
     return _agent
 
 
@@ -280,8 +288,12 @@ def history_to_messages(rows) -> list[AnyMessage]:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_user)):
-    """发送消息，Agent 回复。需要 Bearer token 认证。"""
-    agent = get_agent()
+    """发送消息，Agent 回复。需要 Bearer token 认证。支持意图分发。"""
+    # 意图分发：根据用户输入选择处理策略
+    intent_decision = await classify_intent(req.message)
+    intent = intent_decision.intent
+
+    agent = get_agent(intent=intent)
     session_id = req.session_id or str(uuid.uuid4())
 
     # 恢复上下文：滑动窗口内的历史 + 本轮用户消息，一起进图。
@@ -294,18 +306,19 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
 
     # 把这一轮里所有的 tool_calls 和对应的 ToolMessage 结果配对，组装成轨迹
     trace: list[ToolCallTrace] = []
-    pending_calls = {}
+    pending_calls: dict[str, dict[str, object]] = {}
     for m in messages:
         if isinstance(m, AIMessage) and m.tool_calls:
             for call in m.tool_calls:
-                pending_calls[call["id"]] = {"name": call["name"], "args": call["args"]}
+                call_id = str(call["id"]) if call["id"] else ""
+                pending_calls[call_id] = {"name": call["name"], "args": call["args"]}
         if isinstance(m, ToolMessage):
-            call_info = pending_calls.get(m.tool_call_id, {"name": "unknown", "args": {}})
+            call_info = pending_calls.get(str(m.tool_call_id), {"name": "unknown", "args": {}})
             trace.append(
                 ToolCallTrace(
-                    tool_name=call_info["name"],
-                    tool_input=call_info["args"],
-                    tool_output=m.content,
+                    tool_name=str(call_info["name"]),
+                    tool_input=call_info["args"] if isinstance(call_info["args"], dict) else {},
+                    tool_output=str(m.content) if m.content else "",
                 )
             )
 
@@ -320,12 +333,138 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
         extra={
             "session_id": session_id,
             "user_id": current_user.id,
+            "intent": intent,
             "tool_call_count": len(trace),
             "reply_length": len(final_reply),
         },
     )
 
     return ChatResponse(reply=final_reply, tool_calls=trace, session_id=session_id)
+
+
+@app.post("/chat_stream")
+async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_current_user)):
+    """流式对话接口（SSE）。支持意图分发和实时 token 输出。"""
+    # 意图分发
+    intent_decision = await classify_intent(req.message)
+    intent = intent_decision.intent
+
+    agent = get_agent(intent=intent)
+    session_id = req.session_id or str(uuid.uuid4())
+
+    # 恢复上下文
+    history_rows = await db.load_history(session_id)
+    input_messages = history_to_messages(history_rows)
+    input_messages.append(HumanMessage(content=req.message))
+
+    async def event_generator() -> AsyncGenerator[dict, None]:
+        final_reply = ""
+        trace: list[ToolCallTrace] = []
+        pending_calls = {}
+
+        try:
+            async for event in agent.astream_events({"messages": input_messages}, version="v2"):
+                kind = event.get("event")
+
+                # LLM token 流式输出
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    if hasattr(chunk, "content") and chunk.content:
+                        final_reply += chunk.content
+                        yield {
+                            "event": "message",
+                            "data": json.dumps(
+                                {"type": "token", "data": chunk.content},
+                                ensure_ascii=False,
+                            ),
+                        }
+
+                # 工具调用开始
+                elif kind == "on_tool_start":
+                    name = event["name"]
+                    args = event["data"].get("input", {})
+                    pending_calls[name] = {"name": name, "args": args}
+                    yield {
+                        "event": "message",
+                        "data": json.dumps(
+                            {
+                                "type": "tool_call",
+                                "data": {
+                                    "name": name,
+                                    "status": "start",
+                                    "input": args,
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+
+                # 工具调用结束
+                elif kind == "on_tool_end":
+                    name = event["name"]
+                    output = event["data"].get("output", "")
+                    if name in pending_calls:
+                        trace.append(
+                            ToolCallTrace(
+                                tool_name=name,
+                                tool_input=pending_calls[name]["args"],
+                                tool_output=str(output)[:200],
+                            )
+                        )
+                        del pending_calls[name]
+                    yield {
+                        "event": "message",
+                        "data": json.dumps(
+                            {
+                                "type": "tool_call",
+                                "data": {"name": name, "status": "end"},
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+
+            # 保存对话
+            await db.save_message(session_id, "user", req.message)
+            await db.save_message(session_id, "assistant", final_reply)
+
+            # 完成事件
+            yield {
+                "event": "message",
+                "data": json.dumps(
+                    {
+                        "type": "done",
+                        "data": {
+                            "session_id": session_id,
+                            "tool_calls": trace,
+                            "intent": intent,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"SSE stream error: {e}", exc_info=True)
+            yield {
+                "event": "error",
+                "data": json.dumps({"type": "error", "data": str(e)}, ensure_ascii=False),
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/dispatch")
+async def debug_dispatch(query: str, current_user: db.User = Depends(get_current_user)):
+    """意图分发调试端点。"""
+    decision = await classify_intent(query)
+    return {
+        "query": query,
+        "intent": decision.intent,
+        "confidence": decision.confidence,
+        "reasoning": decision.reasoning,
+        "extracted_order_id": decision.extracted_order_id,
+        "tools_available": [t.name for t in get_tools_for_intent(decision.intent)],
+    }
 
 
 @app.get("/sessions/{session_id}/history")

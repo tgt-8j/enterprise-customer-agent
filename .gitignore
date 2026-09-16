@@ -7,6 +7,7 @@
 # Python 产物
 __pycache__/
 *.pyc
+*.pyo
 
 # 本地生成的数据
 chroma_db/
@@ -28,7 +29,6 @@ tickets.json
 .ruff_cache/
 htmlcov/
 
-# 生成的产物
-__pycache__/
-*.pyc
-*.pyo
+# 本次会话生成的文档（不提交）
+docs/code_review_*.md
+docs/session_log_*.md

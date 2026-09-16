@@ -110,6 +110,8 @@
       border-radius: 3px;
       font-size: 11px;
     }
+    .msg .trace .tool-start { color: #f59e0b; }
+    .msg .trace .tool-end { color: #10b981; }
     .typing {
       align-self: flex-start;
       padding: 10px 14px;
@@ -127,6 +129,14 @@
       0%,20% { content: '.'; }
       40% { content: '..'; }
       60%,100% { content: '...'; }
+    }
+    .cursor::after {
+      content: '▊';
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
     }
 
     .quick-prompts {
@@ -206,10 +216,13 @@
 <body>
 
   <div class="header">
-    <h1>🤖 企业客服 Agent <span class="badge">LangGraph + RAG</span></h1>
+    <h1>🤖 企业客服 Agent <span class="badge">LangGraph + RAG + SSE</span></h1>
     <div class="api-config">
-      <input id="api-url" type="text" placeholder="API 地址，如 http://localhost:8000" value="http://localhost:8000" />
+      <input id="api-url" type="text" placeholder="API 地址，如 http://localhost:8080" value="http://localhost:8080" />
       <button onclick="connectAPI()">连接</button>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="stream-mode" checked /> 流式输出
+      </label>
     </div>
   </div>
 
@@ -244,7 +257,7 @@
 <script>
 let sessionId = null;
 let token = null;
-let apiUrl = 'http://localhost:8000';
+let apiUrl = 'http://localhost:8080';
 let isProcessing = false;
 
 async function setStatus(msg, type) {
@@ -310,31 +323,143 @@ async function sendMessage() {
   appendMsg('user', text);
   isProcessing = true;
   document.getElementById('send-btn').disabled = true;
-  const typing = appendTyping();
+  const useStream = document.getElementById('stream-mode').checked;
   try {
-    const body = { message: text, session_id: sessionId };
-    const opts = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    };
-    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
-    const res = await fetch(apiUrl + '/chat', opts);
-    typing.remove();
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 200));
+    if (useStream) {
+      await sendMessageStream(text);
+    } else {
+      await sendMessageBlock(text);
     }
-    const data = await res.json();
-    sessionId = data.session_id;
-    appendMsg('agent', data.reply, data.tool_calls || []);
   } catch (e) {
-    typing.remove();
     appendMsg('agent', '❌ 请求失败：' + e.message, []);
   } finally {
     isProcessing = false;
     document.getElementById('send-btn').disabled = false;
   }
+}
+
+async function sendMessageBlock(text) {
+  const body = { message: text, session_id: sessionId };
+  const opts = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(apiUrl + '/chat', opts);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 200));
+  }
+  const data = await res.json();
+  sessionId = data.session_id;
+  appendMsg('agent', data.reply, data.tool_calls || []);
+}
+
+async function sendMessageStream(text) {
+  const body = { message: text, session_id: sessionId };
+  const opts = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(apiUrl + '/chat_stream', opts);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 200));
+  }
+  // 创建消息气泡（流式接收）
+  const msgDiv = appendStreamingMsg('agent');
+  let toolCalls = [];
+  let buffer = '';
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let eventBuffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    eventBuffer += chunk;
+
+    // 解析 SSE 事件
+    const lines = eventBuffer.split('\n');
+    eventBuffer = lines.pop() || ''; // 保留最后一行（可能不完整）
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const dataStr = line.slice(6);
+        try {
+          const event = JSON.parse(dataStr);
+          if (event.type === 'token') {
+            buffer += event.data;
+            msgDiv.querySelector('.content').textContent = buffer + '▊';
+          } else if (event.type === 'tool_call') {
+            if (event.data.status === 'start') {
+              const traceDiv = msgDiv.querySelector('.trace') || createTraceDiv(msgDiv);
+              const toolDiv = document.createElement('div');
+              toolDiv.className = 'tool-call tool-start';
+              toolDiv.innerHTML = `<code>${escapeHtml(event.data.name)}</code> ⏳ 执行中...`;
+              traceDiv.appendChild(toolDiv);
+            } else if (event.data.status === 'end') {
+              const traceDiv = msgDiv.querySelector('.trace');
+              if (traceDiv) {
+                const calls = traceDiv.querySelectorAll('.tool-call');
+                for (const call of calls) {
+                  if (call.textContent.includes(event.data.name) && call.classList.contains('tool-start')) {
+                    call.className = 'tool-call tool-end';
+                    call.innerHTML = `<code>${escapeHtml(event.data.name)}</code> ✓ 完成`;
+                  }
+                }
+              }
+            }
+          } else if (event.type === 'done') {
+            sessionId = event.data.session_id;
+            toolCalls = event.data.tool_calls || [];
+            // 移除光标
+            const content = msgDiv.querySelector('.content');
+            if (content) content.textContent = buffer;
+            content?.classList.remove('cursor');
+            // 添加工具调用轨迹
+            if (toolCalls.length > 0) {
+              const traceDiv = msgDiv.querySelector('.trace') || createTraceDiv(msgDiv);
+              traceDiv.innerHTML = toolCalls.map(t =>
+                `<div><code>${escapeHtml(t.tool_name)}</code>(${escapeHtml(JSON.stringify(t.tool_input || {}).slice(0, 60))}) → ${escapeHtml((t.tool_output || '').slice(0, 100))}</div>`
+              ).join('');
+            }
+          } else if (event.type === 'error') {
+            throw new Error(event.data);
+          }
+        } catch (e) {
+          console.error('SSE parse error:', e);
+        }
+      }
+    }
+  }
+}
+
+function createTraceDiv(msgDiv) {
+  let traceDiv = msgDiv.querySelector('.trace');
+  if (!traceDiv) {
+    traceDiv = document.createElement('div');
+    traceDiv.className = 'trace';
+    msgDiv.appendChild(traceDiv);
+  }
+  return traceDiv;
+}
+
+function appendStreamingMsg(role) {
+  const container = document.getElementById('chat-container');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = '<div class="content cursor"></div><div class="trace"></div>' +
+    '<div class="meta">' + (role === 'user' ? '你' : 'Agent') + ' · ' +
+    new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + '</div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
 }
 
 function sendPrompt(text) {

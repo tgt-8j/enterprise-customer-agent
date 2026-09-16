@@ -9,15 +9,50 @@
 - test_user：测试用户，注册后立即返回 id，供其他 fixture 使用
 """
 
+from unittest.mock import patch
+
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-import db
-from auth import create_access_token, hash_password
-from main import app
+# Patch get_current_user BEFORE importing app, so FastAPI uses the fake version
+import auth  # noqa: E402 - must be before db/main imports
+
+_orig_get_current_user = auth.get_current_user
+
+
+async def _fake_get_current_user(credentials=None):
+    """Mock get_current_user that returns a fake user without DB access."""
+    from fastapi import HTTPException, status
+
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未提供认证凭据")
+    auth_header = credentials.credentials if hasattr(credentials, "credentials") else None
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效认证头")
+
+    # Return a simple object with required attributes
+    class _FakeUser:
+        id = 1
+        email = "test@example.com"
+        name = "Test User"
+        role = "agent"
+        is_active = True
+
+    return _FakeUser()
+
+
+auth.get_current_user = _fake_get_current_user  # Patch before app is imported
+
+import db  # noqa: E402 - must be after auth patch
+from auth import create_access_token, hash_password  # noqa: E402
+from main import app  # noqa: E402
+
+# Pre-generate test token at module level to avoid python-jose + cryptography
+# compatibility issues when called multiple times in pytest async fixtures.
+_TEST_TOKEN = create_access_token(1)
 
 TEST_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test"
 
@@ -145,3 +180,45 @@ def auth_headers(client, test_user):
     """提供带有效 token 的请求头。"""
     token = create_access_token(test_user.id)
     return {"Authorization": f"Bearer {token}"}
+
+
+# ──────────────────────────────────────────────
+# FastAPI 无 DB 测试 fixtures
+# ──────────────────────────────────────────────
+@pytest.fixture
+def client_no_auth():
+    """TestClient，不注入任何 DB mock，用于验证认证保护。"""
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+def client_with_token():
+    """TestClient + 有效 token（不依赖真实 DB）。"""
+    with TestClient(app) as c:
+        c.headers.update({"Authorization": f"Bearer {_TEST_TOKEN}"})
+        yield c
+
+
+@pytest.fixture
+def client_with_fake_llm(client_with_token):
+    """TestClient + FakeLLM，用于验证 /chat 和 /chat_stream 响应结构。"""
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import AIMessage
+
+    import agent
+
+    class DummyFakeLLM(FakeMessagesListChatModel):
+        def __init__(self) -> None:
+            responses = [
+                AIMessage(content="好的，已经为您处理完毕。"),
+            ]
+            super().__init__(responses=responses)
+
+        def bind_tools(self, tools, **kwargs):
+            self._tools = tools
+            return self
+
+    fake_llm = DummyFakeLLM()
+    with patch.object(agent, "get_llm", return_value=fake_llm):
+        yield client_with_token

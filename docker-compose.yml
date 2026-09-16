@@ -1,11 +1,15 @@
 # 本地开发 & 预发布部署（docker-compose）
 #
-# 三个服务：
+# 三个服务（默认模式）：
 #   app      - AI Agent 主服务
 #   postgres - PostgreSQL 数据库
 #   chroma   - ChromaDB 向量数据库
 #
-# 启动：docker compose up -d
+# 四个服务（MCP 模式）：
+#   mcp_server - 独立工具服务，通过 MCP 协议暴露 query_order / search_knowledge / create_ticket
+#
+# 启动（默认模式）：docker compose up -d
+# 启动（MCP 模式）：MCP_ENABLED=true docker compose up -d
 # 停止：docker compose down
 # 重建：docker compose up -d --build
 
@@ -15,7 +19,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "${APP_PORT:-8080}:8000"
     env_file:
       - .env
     environment:
@@ -24,11 +28,18 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-agent_demo}
       # ChromaDB 用持久化卷，数据在容器重启后保留
       - CHROMA_DIR=/opt/app/chroma_db
+      # MCP 模式开关（可选）
+      - USE_MCP=${USE_MCP:-false}
+      # MCP Server 地址（容器网络）
+      - MCP_SERVER_URL=http://mcp_server:8001
     depends_on:
       postgres:
         condition: service_healthy
       chroma:
         condition: service_started
+      mcp_server:
+        condition: service_started
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -65,6 +76,26 @@ services:
     image: chromadb/chroma:latest
     volumes:
       - chroma_data:/chroma/chroma
+    networks:
+      - agent-net
+
+  # MCP 工具服务（可选，USE_MCP=true 时启用）
+  # 将三个客服工具暴露为独立服务，支持跨进程调用和多客户端共享
+  mcp_server:
+    profiles:
+      - mcp
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m mcp_server.server
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-agent_demo}
+      - CHROMA_DIR=/opt/app/chroma_db
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - agent-net
 

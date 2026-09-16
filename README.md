@@ -85,6 +85,24 @@ python -c "import secrets; print(secrets.token_hex(32))"
  PostgreSQL  ChromaDB   PostgreSQL
 ```
 
+**工具加载模式**（可选）：
+
+默认使用本地 `@tool` 定义，也可切换到 MCP 协议模式：
+
+```bash
+# 默认模式：本地工具
+docker compose up -d
+
+# MCP 模式：工具服务化（需要独立部署 mcp_server）
+docker compose --profile mcp up -d
+# 或通过环境变量启用：USE_MCP=true docker compose up -d
+```
+
+MCP 模式下，三个工具通过标准 MCP 协议暴露为独立服务（`mcp_server:8001`），
+Agent 通过 `langchain-mcp-adapters` 连接并加载工具。
+Server 挂掉时自动 fallback 到本地工具，保障高可用。
+支持未来接入更多 MCP Server（如 CRM、ERP 等）。
+
 **三个工具**：
 - `query_order` — 查订单状态和物流信息
 - `search_knowledge` — RAG 向量检索知识库（Embedding API + ChromaDB，带熔断器）

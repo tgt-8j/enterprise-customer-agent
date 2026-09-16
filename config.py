@@ -75,6 +75,12 @@ class BaseConfig(BaseSettings):
     access_token_expire_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_expire_days: int = Field(default=7, ge=1, le=365)
 
+    # ---------- MCP 工具集成 ----------
+    use_mcp: bool = Field(default=False, description="是否启用 MCP 协议加载工具")
+    mcp_server_url: str = Field(
+        default="", description="MCP Server 地址，如 http://localhost:8001/mcp"
+    )
+
     # ---------- 服务器 ----------
     host: str = Field(default="0.0.0.0", description="监听地址")
     port: int = Field(default=8000, ge=1, le=65535)

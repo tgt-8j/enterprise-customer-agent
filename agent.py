@@ -17,15 +17,19 @@ create_react_agent 一行代码就能给你一个能用的 Agent，但面试官�
                 └─ 没有 → END
 """
 
+import asyncio
+import logging
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AnyMessage
+from langchain_core.messages import AnyMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from llm import get_llm
 from tools import ALL_TOOLS
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """你是一个企业电商客服 Agent，负责处理用户关于订单和物流的问题。
 
@@ -79,38 +83,105 @@ class AgentState(TypedDict):
     # 而不是覆盖整个列表 —— 这就是"多轮对话历史"最原始的雏形，
     # V4 阶段做真正的 Memory 时，会在这个基础上做持久化和裁剪。
     messages: Annotated[list[AnyMessage], add_messages]
+    # 意图分发结果（由 dispatch 节点填充，主 agent 节点消费）
+    dispatch: dict
 
 
-def build_agent(llm=None):
+def build_agent(llm=None, use_mcp=False, intent="general"):
     """
     构建并编译 LangGraph。
-    llm 参数可以外部传入（测试时传一个假的 LLM 进来，不需要真实 API Key）。
+
+    Args:
+        llm: 外部传入（测试时用假 LLM）
+        use_mcp: 是否通过 MCP 协议加载工具（默认 False，直接用 @tool）
+        intent: 意图分类结果，用于选择对应的 system prompt
     """
     if llm is None:
         llm = get_llm()
 
-    llm_with_tools = llm.bind_tools(ALL_TOOLS)
+    # 根据意图选择 tools 集合
+    tools = _get_tools_for_intent(intent, use_mcp=use_mcp)
+    llm_with_tools = llm.bind_tools(tools)
+
+    # 根据意图选择 system prompt
+    system_prompt = _get_system_prompt(intent)
 
     def call_model(state: AgentState):
         messages = state["messages"]
         # 第一次调用时，把 system prompt 插到最前面
         if not any(getattr(m, "type", None) == "system" for m in messages):
-            from langchain_core.messages import SystemMessage
-
-            messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
+            messages = [SystemMessage(content=system_prompt)] + messages
         response = llm_with_tools.invoke(messages)
         return {"messages": [response]}
 
     graph = StateGraph(AgentState)
     graph.add_node("agent", call_model)
-    graph.add_node("tools", ToolNode(ALL_TOOLS))
+    graph.add_node("tools", ToolNode(tools))
 
     graph.add_edge(START, "agent")
-    # tools_condition 是 langgraph 提供的现成判断函数：
-    # 检查上一条 AI 消息里有没有 tool_calls，有就路由到 "tools"，没有就路由到 END。
-    # 这一步我们复用官方实现（因为它就是在读 AIMessage.tool_calls 这个标准字段，
-    # 自己重写没有额外价值），但节点和整体图结构是手写的。
     graph.add_conditional_edges("agent", tools_condition, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")  # 工具执行完，回到 agent 节点继续判断
+    graph.add_edge("tools", "agent")
 
     return graph.compile()
+
+
+def _get_tools_for_intent(intent: str, use_mcp: bool = False):
+    """根据意图选择工具集合。"""
+    if use_mcp:
+        # MCP 模式：返回所有工具，由意图分发决定在对话中实际使用哪些
+        return ALL_TOOLS
+    if intent == "query_order":
+        return [t for t in ALL_TOOLS if t.name == "query_order"]
+    elif intent == "knowledge_search":
+        return [t for t in ALL_TOOLS if t.name == "search_knowledge"]
+    elif intent == "chitchat":
+        return []
+    else:
+        return ALL_TOOLS
+
+
+def _get_system_prompt(intent: str) -> str:
+    """根据意图选择 system prompt 变体。"""
+    if intent == "chitchat":
+        return """你是一个友好的企业客服助手。可以回答用户的问候和一般性问题。
+如果用户问订单或政策相关问题，引导他们提供更具体的信息。
+对于闲聊类问题，简洁友好地回复即可。"""
+    return SYSTEM_PROMPT
+
+
+def get_tools_for_intent(intent: str, use_mcp: bool = False):
+    """获取指定意图的工具列表。供 main.py 的 dispatch 路由使用。
+
+    use_mcp=True 时通过 langchain-mcp-adapters 从远程 MCP Server 加载工具，
+    支持跨进程解耦的工具服务化部署。
+    """
+    if use_mcp:
+        return asyncio.run(get_mcp_tools())
+    return _get_tools_for_intent(intent)
+
+
+async def get_mcp_tools():
+    """通过 MCP 协议加载远程工具，MCP Server 挂掉时自动回退到本地工具。
+
+    MCP Server 地址由 MCP_SERVER_URL 环境变量控制，默认 http://mcp_server:8001/mcp。
+    """
+    import os
+
+    try:
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        url = os.getenv("MCP_SERVER_URL", "http://mcp_server:8001/mcp")
+        client = MultiServerMCPClient(
+            {
+                "customer_service": {
+                    "url": url,
+                    "transport": "streamable_http",  # FastMCP 默认使用 streamable-http 传输
+                }
+            }
+        )
+        tools = await client.get_tools()
+        logger.info(f"MCP 加载成功，获得 {len(tools)} 个工具")
+        return tools
+    except Exception as e:
+        logger.warning(f"MCP 加载失败，回退到本地工具: {e}")
+        return ALL_TOOLS
