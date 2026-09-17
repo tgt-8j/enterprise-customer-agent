@@ -313,3 +313,143 @@ Step 5  行为评测（如果有 LLM）
         python evals/run_eval.py
         关注通过率，不稳定可以接受但要有解释
 ```
+
+
+---
+
+## 八、运行时 Bug 与修复
+
+### 15. 单例缓存 Bug：知识库检索工具调用失败
+
+**错误现象：**
+```
+Error: search_knowledge is not a valid tool, try one of [query_order].
+```
+用户问"质量问题退货要多久"、"7天无理由能退吗"等知识库问题，Agent 回答"系统暂不支持知识库检索"或直接凭记忆回答，而不是调用 `search_knowledge` 工具。
+
+**根本原因：**
+
+`main.py` 中使用全局变量 `_agent` 缓存 Agent 实例，但只创建一次：
+
+```python
+# 修复前（有 Bug）
+_agent = None
+
+def get_agent(intent: str = "general"):
+    global _agent
+    if _agent is None:           # ← 只有第一次是 None 才创建
+        _agent = build_agent(intent=intent, use_mcp=use_mcp)
+    return _agent                # ← 后续都返回同一个 agent
+```
+
+执行流程：
+```
+请求1: "查订单12345"
+  → intent = "query_order"
+  → _agent is None → 创建 agent(query_order)
+  → 工具集合 = [query_order]  ✓
+  → 缓存到 _agent
+
+请求2: "7天无理由能退吗"
+  → intent = "knowledge_search"
+  → _agent is NOT None → 直接返回旧 agent
+  → 工具集合仍然是 [query_order]  ✗（应该是 [search_knowledge]）
+  → LLM 尝试调用 search_knowledge
+  → ToolNode 报错："search_knowledge is not a valid tool"
+```
+
+**为什么会出现这个问题：**
+
+LangGraph 的 `build_agent()` 在编译时就把工具集合绑定到图中：
+```python
+tools = _get_tools_for_intent(intent)  # 根据 intent 选择工具
+llm_with_tools = llm.bind_tools(tools)  # 绑定到 LLM
+graph.add_node("tools", ToolNode(tools))  # 绑定到工具节点
+```
+
+一旦创建，工具集合就固定了，无法动态修改。所以不同 intent 必须用不同的 agent 实例。
+
+**修复方案：**
+
+改为按 intent 缓存不同的 agent 实例：
+
+```python
+# 修复后
+_agent_cache = {}
+
+def get_agent(intent: str = "general"):
+    """获取指定意图的Agent，按intent缓存不同配置的agent。"""
+    if intent not in _agent_cache:
+        import os
+        use_mcp = os.getenv("USE_MCP", "false").lower() == "true"
+        _agent_cache[intent] = build_agent(intent=intent, use_mcp=use_mcp)
+    return _agent_cache[intent]
+```
+
+**验证方法：**
+
+1. 重启服务后访问 http://localhost:8080/demo/index.html
+2. 依次发送：
+   - "帮我查一下订单12345" → 应看到 `query_order` 工具调用 ✓
+   - "7天无理由能退吗" → 应看到 `search_knowledge` 工具调用 ✓
+   - "质量问题退货要多久内申请？" → 应看到 `search_knowledge` 工具调用 ✓
+3. 查看日志确认：
+   ```bash
+   grep "工具调用开始\|工具调用结束" logs/app.log | tail -20
+   ```
+
+**设计要点：**
+
+- 为什么不用 `@lru_cache`？因为 agent 实例包含状态（LLM 绑定、工具集合），字典缓存更直观且方便调试。
+- 内存泄漏风险？本项目只有 5 种 intent（query_order / knowledge_search / create_ticket / chitchat / general），缓存最多 5 个 agent，不存在泄漏。
+- 如果将来新增 intent？只需在 `_get_tools_for_intent()` 添加分支，缓存逻辑无需修改。
+
+---
+
+### 16. 启动顺序问题：先启服务再建库导致 RAG 失效
+
+**错误现象：**
+```
+知识库尚未建立，请先运行 python scripts/build_kb.py 建库
+```
+
+**原因：** `rag.py` 在模块加载时初始化 ChromaDB 连接，如果服务启动时知识库为空，后续 `build_kb.py` 写入的数据不会自动刷新缓存。
+
+**解决：**
+```bash
+# 正确顺序
+docker compose up -d postgres chroma      # 1. 启动数据库
+python scripts/seed_data.py               # 2. 灌入订单数据
+python scripts/build_kb.py                # 3. 构建向量知识库
+python -m uvicorn main:app --reload --port 8080   # 4. 启动服务
+
+# 如果顺序错了，重启服务即可
+taskkill /F /PID <uvicorn PID>
+python -m uvicorn main:app --reload --port 8080
+```
+
+---
+
+### 17. Docker 端口冲突
+
+**错误现象：**
+```
+port 5432 is already in use
+port 8080 is already in use
+```
+
+**原因：** 其他项目（如 `deep_research`）已经占用了这些端口。
+
+**解决：**
+```bash
+# 查看占用端口的进程
+netstat -ano | findstr :5432
+netstat -ano | findstr :8080
+
+# 找到 PID 后结束进程
+taskkill /F /PID <PID>
+
+# 或者修改 docker-compose.yml 使用不同端口
+# postgres: "5433:5432"
+# app: "8081:8000"
+```

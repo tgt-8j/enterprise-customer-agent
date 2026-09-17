@@ -69,17 +69,17 @@ _DEMO_DIR = Path(__file__).parent / "demo"
 if _DEMO_DIR.is_dir():
     app.mount("/demo", StaticFiles(directory=str(_DEMO_DIR), html=True), name="demo")
 
-_agent = None
+_agent_cache = {}
 
 
 def get_agent(intent: str = "general"):
-    global _agent
-    if _agent is None:
+    """获取指定意图的Agent，按intent缓存不同配置的agent。"""
+    if intent not in _agent_cache:
         import os
 
         use_mcp = os.getenv("USE_MCP", "false").lower() == "true"
-        _agent = build_agent(intent=intent, use_mcp=use_mcp)
-    return _agent
+        _agent_cache[intent] = build_agent(intent=intent, use_mcp=use_mcp)
+    return _agent_cache[intent]
 
 
 # ---------- 请求/响应模型 ----------
