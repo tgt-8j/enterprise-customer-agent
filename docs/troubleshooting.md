@@ -335,11 +335,12 @@ Error: search_knowledge is not a valid tool, try one of [query_order].
 # 修复前（有 Bug）
 _agent = None
 
+
 def get_agent(intent: str = "general"):
     global _agent
-    if _agent is None:           # ← 只有第一次是 None 才创建
+    if _agent is None:  # ← 只有第一次是 None 才创建
         _agent = build_agent(intent=intent, use_mcp=use_mcp)
-    return _agent                # ← 后续都返回同一个 agent
+    return _agent  # ← 后续都返回同一个 agent
 ```
 
 执行流程：
@@ -377,10 +378,12 @@ graph.add_node("tools", ToolNode(tools))  # 绑定到工具节点
 # 修复后
 _agent_cache = {}
 
+
 def get_agent(intent: str = "general"):
     """获取指定意图的Agent，按intent缓存不同配置的agent。"""
     if intent not in _agent_cache:
         import os
+
         use_mcp = os.getenv("USE_MCP", "false").lower() == "true"
         _agent_cache[intent] = build_agent(intent=intent, use_mcp=use_mcp)
     return _agent_cache[intent]
