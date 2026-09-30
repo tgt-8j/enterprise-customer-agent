@@ -17,7 +17,7 @@
 | `tools.py` | 70% | **100%** | +30% |
 | `rag.py` | 63% | **98%** | +35% |
 | `main.py` | 50% | **90%** | +40% |
-| `test_main_mock.py` | - | **100%** | 新建 |
+| `test_main_mock.py` | - | **99%** | 新建 |
 | `test_mcp_server.py` | - | **100%** | 新建 |
 | `test_rag_extended.py` | - | **100%** | 新建 |
 | **整体** | **66%** | **92%** | **+26%** |
@@ -45,7 +45,7 @@
 ## 二、测试通过情况
 
 ```
-================= 139 passed, 19 skipped, 1 warning in 7.13s ==================
+================= 139 passed, 19 skipped, 1 warning in 7.24s ==================
 ```
 
 ### 跳过测试（19 个）
@@ -79,7 +79,7 @@
 ## 四、关键变更
 
 ```
-auth.py                   - datetime.UTC → timezone.utc (Python 3.10 兼容)
+auth.py                   - datetime.UTC -> timezone.utc (Python 3.10 兼容)
 tests/conftest.py         - 新增 main.get_current_user patch
 tests/test_main_mock.py   - 新建（+25 tests，使用 dependency_overrides）
 tests/test_mcp_server.py  - 新建（+10 tests）

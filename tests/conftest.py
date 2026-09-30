@@ -134,6 +134,9 @@ async def db_session():
 async def test_db_engine():
     """供 TestEnsureTables 等直接使用 engine 的场景使用（兼容旧测试）。"""
     engine = _make_test_engine()
+    # 确保使用与主 db 引擎相同的数据库（WSL2/Docker 环境）
+    original_url = db.engine.url
+    engine = create_async_engine(original_url, echo=False, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(db.Base.metadata.create_all)
     yield engine
