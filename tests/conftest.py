@@ -21,6 +21,8 @@ from sqlalchemy.pool import NullPool
 import auth  # noqa: E402 - must be before db/main imports
 
 _orig_get_current_user = auth.get_current_user
+_orig_get_optional_user = auth.get_optional_user
+_orig_require_admin = auth.require_admin
 
 
 async def _fake_get_current_user(credentials=None):
@@ -48,6 +50,8 @@ auth.get_current_user = _fake_get_current_user  # Patch before app is imported
 
 import db  # noqa: E402 - must be after auth patch
 from auth import create_access_token, hash_password  # noqa: E402
+import main  # noqa: E402 - need to patch main's binding too
+main.get_current_user = _fake_get_current_user  # from-import binds separately in main
 from main import app  # noqa: E402
 
 # Pre-generate test token at module level to avoid python-jose + cryptography
