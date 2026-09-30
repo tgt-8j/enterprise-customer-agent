@@ -68,6 +68,6 @@ class TestDbAvailable:
         """当数据库不可达时，_db_available 返回 False。"""
         from tests.conftest import _db_available
         # 用一个明显不存在的端口
-        with patch("tests.conftest.TEST_DATABASE_URL", "postgresql+asyncpg://x:x@localhost:1九九九/x"):
+        with patch("tests.conftest._TEST_DB_URL", "postgresql+asyncpg://x:x@localhost:19999/x"):
             result = _db_available()
         assert result is False

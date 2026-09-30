@@ -58,8 +58,10 @@ from main import app  # noqa: E402
 # compatibility issues when called multiple times in pytest async fixtures.
 _TEST_TOKEN = create_access_token(1)
 
-TEST_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test"
-
+# 优先使用环境变量 DATABASE_URL，其次使用默认值
+# WSL2 环境中需要通过 host.docker.internal 访问 Windows 上的 Docker
+import os as _os
+_TEST_DB_URL = _os.environ.get('DATABASE_URL', 'postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test')
 
 def _db_available() -> bool:
     """检查 PostgreSQL 是否可用。"""
@@ -69,7 +71,7 @@ def _db_available() -> bool:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     try:
-        engine = create_async_engine(TEST_DATABASE_URL)
+        engine = create_async_engine(_TEST_DB_URL)
 
         async def _check():
             async with engine.connect() as conn:
@@ -89,7 +91,7 @@ def _db_available() -> bool:
 def _make_test_engine():
     """同步工厂：在调用点的当前事件循环内创建引擎。"""
     return create_async_engine(
-        TEST_DATABASE_URL,
+        _TEST_DB_URL,
         echo=False,
         poolclass=NullPool,  # 每次查询独占一条连接，无需连接池
     )
