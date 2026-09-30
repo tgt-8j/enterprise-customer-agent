@@ -17,7 +17,7 @@
         ...
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -72,7 +72,7 @@ def create_access_token(
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.access_token_expire_minutes)
 
-    expire = datetime.now(UTC) + expires_delta
+    expire = datetime.now(timezone.utc) + expires_delta
     payload = {"sub": str(subject), "type": "access", "exp": expire}
     if extra_claims:
         payload.update(extra_claims)
@@ -81,7 +81,7 @@ def create_access_token(
 
 def create_refresh_token(subject: int) -> str:
     """生成 refresh token（默认 7 天有效期）。"""
-    expire = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
+    expire = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     payload = {"sub": str(subject), "type": "refresh", "exp": expire}
     return _encode(payload)
 

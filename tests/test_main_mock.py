@@ -397,6 +397,74 @@ class TestResponseHeaders:
 
 
 # ──────────────────────────────────────────────
+# get_agent 单元测试
+# ──────────────────────────────────────────────
+class TestGetAgent:
+    def test_get_agent_cache_hit(self):
+        """已缓存的 agent 直接返回。"""
+        from main import get_agent, _agent_cache
+        agent = MagicMock()
+        _agent_cache["general"] = agent
+        result = get_agent("general")
+        assert result is agent
+        # 清理
+        _agent_cache.pop("general", None)
+
+    def test_get_agent_cache_miss(self):
+        """未缓存时创建新 agent。"""
+        from main import get_agent, _agent_cache
+        import os
+        # 确保不使用 MCP
+        old_mcp = os.environ.get("USE_MCP")
+        os.environ["USE_MCP"] = "false"
+        try:
+            result = get_agent("general")
+            assert result is not None
+            assert "general" in _agent_cache
+        finally:
+            if old_mcp is not None:
+                os.environ["USE_MCP"] = old_mcp
+            else:
+                os.environ.pop("USE_MCP", None)
+            _agent_cache.pop("general", None)
+
+
+# ──────────────────────────────────────────────
+# refresh 端点异常路径
+# ──────────────────────────────────────────────
+class TestRefreshErrors:
+    def test_refresh_wrong_token_type(self, client):
+        """refresh token 类型不是 refresh 时返回 401。"""
+        with patch("auth.decode_token", return_value={"sub": "1", "type": "access"}):
+            response = client.post(
+                "/api/auth/refresh",
+                json={"refresh_token": "fake-token"},
+            )
+        assert response.status_code == 401
+
+    def test_refresh_user_not_found(self, client):
+        """用户不存在时返回 401。"""
+        mock_db = _patch_db_and_intent()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        mock_db.AsyncSessionLocal = MagicMock(return_value=mock_session)
+        import db
+        mock_db.User = db.User
+
+        with patch("main.db", mock_db), \
+             patch("auth.decode_token", return_value={"sub": "999", "type": "refresh"}):
+            response = client.post(
+                "/api/auth/refresh",
+                json={"refresh_token": "fake-token"},
+            )
+        assert response.status_code == 401
+
+
+# ──────────────────────────────────────────────
 # history_to_messages 工具函数
 # ──────────────────────────────────────────────
 class TestHistoryToMessages:
