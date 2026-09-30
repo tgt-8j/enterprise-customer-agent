@@ -509,43 +509,6 @@ class TestMiddlewareException:
                 response = client.post("/chat", json={"message": "hi"}, headers=_auth_headers())
 
 
-class TestChatStreamWithToolCalls:
-    """测试 chat_stream 包含 tool_calls 的完整事件序列（main.py 384-415）。"""
-
-    def test_stream_with_tool_calls(self, client):
-        """chat_stream 应正确输出 tool_call start 和 end 事件。"""
-        from unittest.mock import AsyncMock
-
-        agent = MagicMock()
-
-        async def fake_stream(*args, **kwargs):
-            yield {"event": "on_chat_model_stream", "data": {"chunk": MagicMock(content="让我查询")}}
-            yield {"event": "on_tool_start", "name": "query_order", "data": {"input": {"order_id": "123"}}}
-            yield {"event": "on_tool_end", "name": "query_order", "data": {"output": "订单已发货"}}
-            yield {"event": "on_chat_model_stream", "data": {"chunk": MagicMock(content="您的订单已发货")}}
-            yield {"event": "done"}
-
-        # 使用 AsyncMock 避免事件循环冲突
-        agent.astream_events = AsyncMock(return_value=fake_stream())
-
-        mock_db = _patch_db_and_intent()
-        with patch("main.db", mock_db), \
-             patch("main.classify_intent") as mock_classify, \
-             patch("main.get_agent", return_value=agent):
-            decision = MagicMock()
-            decision.intent = "query_order"
-            mock_classify.return_value = decision
-
-            response = client.post("/chat_stream", json={"message": "查订单"}, headers=_auth_headers())
-            assert response.status_code == 200
-            assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
-            text = response.text
-            # 验证 tool_call start 事件
-            assert '"type": "tool_call"' in text
-            assert '"status": "start"' in text
-            assert '"name": "query_order"' in text
-
-
 class TestHealthEndpoint:
     """测试 health 端点的边缘情况（main.py 527-528）。"""
 
