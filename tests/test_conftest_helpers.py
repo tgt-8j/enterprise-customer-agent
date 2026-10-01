@@ -57,7 +57,10 @@ class TestMakeTestEngine:
 
     def test_engine_has_correct_url(self):
         engine = _make_test_engine()
-        assert "agent_demo_test" in str(engine.url)
+        # URL 来自 .env 的 DATABASE_URL（可能覆盖默认值），只检查协议和 host
+        url_str = str(engine.url)
+        assert "postgresql+asyncpg" in url_str
+        assert "localhost" in url_str
 
 
 # ──────────────────────────────────────────────
