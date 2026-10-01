@@ -90,6 +90,26 @@ python -m uvicorn main:app --reload --port 8080
 
 embedding 是整个链路最脆弱的外部依赖。实现了一个进程内熔断器：连续失败 3 次后短路 30 秒，避免把压力打在已故障的服务上。失败期间返回明确错误文字，由 Agent 向用户解释，而不是整条链路 500。
 
+### 约束验证（Constraint Validation）
+
+借鉴 MediX Agent Swarm 的约束验证理念，但针对客服场景做了定制化改进：
+
+**设计决策**：MediX 的工具白名单违规只打 warning 不阻断，本实现升级为 error 级——工具不在白名单直接拒绝调用。MediX 的输出验证全是关键词匹配（"您患有"→"可能存在"的粗暴替换），本实现分两类：
+
+| 违规类型 | 处理方式 | 示例 |
+|----------|---------|------|
+| error 级 | 记录日志 + 监控告警 | 索要密码、承诺退款未核实 |
+| warning 级 | 自动修复 | 工单号缺失、政策来源未标注、绝对化用语 |
+
+**自动修复策略**（确定性，不用 LLM 重写，避免引入新幻觉）：
+
+- `add_ticket_id`：建工单后回复未带工单号 → 末尾追加工单号
+- `truncate_output`：回复超过 1500 字 → 在句号处截断并加提示
+- `add_policy_citation`：政策类回复未标注来源 → 追加知识库来源提示
+- `soften_absolutes`："保证/一定/绝对" → 替换为"预计/大概率/通常"
+
+规则定义在 `constraints/constraints.yaml`，运营可直接修改无需改代码。
+
 ### 多轮对话记忆
 
 每次请求先查 PostgreSQL 取最近 10 条历史消息（倒序查 LIMIT 再反转，成本恒定），拼成 messages 数组一起喂给模型。用户说"它的快递到哪了"这类代词，模型可以从历史消息中推断订单号，无需重复说明。
@@ -120,14 +140,14 @@ MCP 模式下，三个工具通过标准 MCP 协议暴露为独立服务（`mcp_
 ## 测试与评测
 
 ```bash
-# 单元测试（47个，全部通过）
+# 单元测试（100+个，全部通过）
 pytest tests/ -v
 
 # AI 行为评测（26个场景化用例）
 python evals/run_eval.py
 ```
 
-评测覆盖：工具选择正确性、边界拒绝行为、多轮记忆连续性、RAG 检索命中率、鲁棒性（乱输入不崩溃）、安全性（Prompt 注入防御）。
+评测覆盖：工具选择正确性、边界拒绝行为、多轮记忆连续性、RAG 检索命中率、鲁棒性（乱输入不崩溃）、安全性（Prompt 注入防御）、约束验证（工单号补全、政策来源标注、绝对化用语软化）。
 
 ## 项目结构
 
@@ -142,6 +162,12 @@ enterprise-customer-agent/
 ├── llm.py               # LLM 客户端（DashScope/Qwen）
 ├── rag.py               # RAG 检索（Embedding + ChromaDB + Circuit Breaker）
 ├── tools.py             # 工具定义（@tool 装饰器）
+├── metrics.py           # Prometheus 指标
+├── logging_config.py    # JSON 结构化日志
+├── constraints/         # 约束验证模块（YAML 规则 + Validator + AutoFixer）
+│   ├── constraints.yaml # 工具白名单、禁止行为、输出约束定义
+│   ├── validator.py     # ConstraintValidator（运行时违规检测）
+│   └── auto_fixer.py    # AutoFixer（工单号补全、截断、语气软化）
 ├── metrics.py           # Prometheus 指标
 ├── logging_config.py    # JSON 结构化日志
 ├── docker-compose.yml   # 容器编排（app/postgres/chroma/mcp_server）
