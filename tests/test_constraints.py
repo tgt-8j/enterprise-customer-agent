@@ -303,6 +303,13 @@ class TestAutoFixer:
         assert "已截断" in fixed
         assert len(fixed) <= 1500
 
+    def test_truncate_at_sentence_boundary(self, fixer):
+        # 较长文本+中间有\n\n，断点应落在后半段而非开头
+        text = "aaa" * 300 + "\n\n续" * 300
+        fixed = fixer.fix_output(text, auto_fixable=["truncate_output"])
+        assert "已截断" in fixed
+        assert len(fixed) <= 1500
+
     def test_truncate_with_newlines(self, fixer):
         text = "第一段\n\n第二段内容很多很长一直到超过限制。" + "x" * 1600
         fixed = fixer.fix_output(text, auto_fixable=["truncate_output"])
