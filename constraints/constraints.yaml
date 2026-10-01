@@ -1,0 +1,44 @@
+# 客服 Agent 约束定义
+# 基于"约束即代码"理念：业务规则显式化，便于审计和测试
+
+agents:
+  customer_service:
+    # 允许使用的工具白名单
+    allowed_tools:
+      - query_order
+      - search_knowledge
+      - create_ticket
+
+    # 禁止的行为（违反则视为严重违规）
+    forbidden_actions:
+      - promise_refund_without_verification   # 未经核实承诺退款
+      - fabricate_order_info                  # 编造订单信息
+      - disclose_competitor_pricing           # 透露竞品价格信息
+      - guarantee_delivery_time               # 承诺具体送达时间（物流受多方因素影响）
+      - ask_for_password_or_ssn               # 索要用户密码或身份证号
+      - provide_medical_advice                # 提供医疗建议（超出客服职责）
+
+    # 输出必须满足的条件
+    output_constraints:
+      - must_include_ticket_id_if_ticket_created   # 建工单后回复必须包含工单号
+      - must_cite_policy_source                    # 引用政策时须标注来源文档
+      - max_response_length: 1500                  # 单次回复不超过 1500 字
+      - no_absolute_guarantees                     # 禁用"保证""一定""绝对"等绝对化用语
+
+  chitchat:
+    allowed_tools: []
+    forbidden_actions:
+      - ask_for_password_or_ssn
+      - provide_medical_advice
+    output_constraints:
+      - max_response_length: 500
+
+# 全局安全规则（所有意图共享）
+common:
+  output_constraints:
+    - no_medical_jargon_without_explanation   # 医学术语需解释（如有涉及）
+    - no_fear_mongering                       # 不制造恐慌
+
+  safety_rules:
+    - always_escalate_on_abuse                # 用户辱骂时升级处理
+    - respect_user_privacy                    # 不主动询问或存储敏感信息

@@ -46,6 +46,8 @@ from auth import (
 )
 from config import settings
 from dispatch import classify_intent
+from constraints.validator import ConstraintValidator
+from constraints.auto_fixer import AutoFixer
 from logging_config import setup_logging
 from metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
 
@@ -323,6 +325,51 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
             )
 
     final_reply = messages[-1].content if messages else ""
+
+    # 约束验证：检查输出是否符合业务安全约束，必要时自动修复
+    _constraint_validator = ConstraintValidator()
+    _auto_fixer = AutoFixer()
+    # 判断本轮是否创建了工单（用于上下文感知验证）
+    ticket_created = any(tc.tool_name == "create_ticket" for tc in trace)
+    ticket_id = None
+    if ticket_created:
+        for tc in trace:
+            if tc.tool_name == "create_ticket":
+                try:
+                    import json as _json
+                    parsed = _json.loads(tc.tool_output)
+                    if isinstance(parsed, dict) and parsed.get("ticket_id"):
+                        ticket_id = str(parsed["ticket_id"])
+                        break
+                except Exception:
+                    pass
+    validation_ctx = {
+        "ticket_created": ticket_created,
+        "ticket_id": ticket_id,
+        "order_verified": True,  # 工单创建前已验证订单存在
+    }
+    vresult = _constraint_validator.validate_output(intent, final_reply, context=validation_ctx)
+    if vresult.auto_fixable:
+        fixed_reply = _auto_fixer.fix_output(final_reply, vresult.auto_fixable, context=validation_ctx)
+        if fixed_reply != final_reply:
+            logger.info(
+                "约束验证已自动修复输出",
+                extra={
+                    "fixes": vresult.auto_fixable,
+                    "violations_count": len(vresult.violations),
+                },
+            )
+            final_reply = fixed_reply
+    if vresult.is_blockable:
+        logger.warning(
+            "约束验证发现阻断性违规，记录到监控",
+            extra={
+                "violations": [
+                    {"rule": v.rule, "detail": v.detail}
+                    for v in vresult.violations if v.severity == "error"
+                ],
+            },
+        )
 
     # 本轮对话入库：只存 user 消息 + assistant 最终回复（中间工具过程不入库）
     await db.save_message(session_id, "user", req.message)
