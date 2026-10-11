@@ -26,6 +26,7 @@ V7 增强：
 不会卡住 FastAPI 的事件循环（详见 tools.py 里 search_knowledge 的注释）。
 """
 
+from functools import lru_cache
 import logging
 import os
 import time
@@ -44,7 +45,9 @@ logger = logging.getLogger(__name__)
 # ---------- 路径与配置 ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 KNOWLEDGE_DIR = os.path.join(BASE_DIR, "knowledge")
-CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
+# ChromaDB path is read from config.py (settings.chroma_path) so it can be
+# overridden via .env for Docker volume mounts, avoiding data loss on restart.
+CHROMA_DIR = os.path.join(BASE_DIR, settings.chroma_path)
 COLLECTION_NAME = "knowledge_base"
 
 # V7：从 config.py 读取 embedding 配置，启动时类型校验。
@@ -74,7 +77,6 @@ NOT_FOUND_MSG = "未找到相关信息"
 KB_NOT_BUILT_MSG = "知识库尚未建立，请先运行 python scripts/build_kb.py 建库"
 
 # 进程内缓存 collection 句柄，避免每次检索都重新打开 SQLite。
-_collection_cache = None
 
 
 # ---------- V7：Embedding API 熔断器 ----------
@@ -273,20 +275,17 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 # ---------- 4. ChromaDB 集合 ----------
+@lru_cache(maxsize=1)
 def get_collection():
     """获取（或创建）持久化的 ChromaDB 集合。
 
-    hnsw:space 用 cosine 而不是默认的 l2：cosine 只关心向量方向（语义相似度），
     不关心模长，对文本 embedding 是标准选择。
     """
-    global _collection_cache
-    if _collection_cache is None:
-        client = chromadb.PersistentClient(path=CHROMA_DIR)
-        _collection_cache = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
-    return _collection_cache
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 # ---------- 5. 建库（幂等）----------
@@ -313,8 +312,6 @@ def build_knowledge_base(rebuild: bool = False) -> dict:
     if rebuild:
         client = collection._client  # noqa: SLF001 重建时直接删集合最干净
         client.delete_collection(COLLECTION_NAME)
-        global _collection_cache
-        _collection_cache = None
         collection = get_collection()
 
     # 所有 chunk 平铺，并记录来源文档，作为 metadata 存进去

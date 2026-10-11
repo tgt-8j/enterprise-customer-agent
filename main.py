@@ -25,6 +25,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -60,7 +61,12 @@ app = FastAPI(title=settings.app_name, debug=settings.debug)
 # 允许前端页面（file:// 或任意 origin）访问 API——demo 页面以文件方式打开时会触发跨域
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,17 +77,12 @@ _DEMO_DIR = Path(__file__).parent / "demo"
 if _DEMO_DIR.is_dir():
     app.mount("/demo", StaticFiles(directory=str(_DEMO_DIR), html=True), name="demo")
 
-_agent_cache = {}
+@lru_cache(maxsize=16)
+def get_agent(intent: str = "general", use_mcp: bool = False):
+    """Get agent for intent, cached up to 16 entries by (intent, use_mcp)."""
+    return build_agent(intent=intent, use_mcp=use_mcp)
 
 
-def get_agent(intent: str = "general"):
-    """获取指定意图的Agent，按intent缓存不同配置的agent。"""
-    if intent not in _agent_cache:
-        import os
-
-        use_mcp = os.getenv("USE_MCP", "false").lower() == "true"
-        _agent_cache[intent] = build_agent(intent=intent, use_mcp=use_mcp)
-    return _agent_cache[intent]
 
 
 # ---------- 请求/响应模型 ----------
@@ -491,7 +492,30 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
             }
 
         except Exception as e:
+            # Cleanup pending tool calls to prevent frontend hang
+            for _tc_name in list(pending_calls):
+                trace.append(
+                    ToolCallTrace(
+                        tool_name=_tc_name,
+                        tool_input=pending_calls[_tc_name]["args"],
+                        tool_output="[stream error]",
+                    )
+                )
             logger.error(f"SSE stream error: {e}", exc_info=True)
+            yield {
+                "event": "message",
+                "data": json.dumps(
+                    {
+                        "type": "done",
+                        "data": {
+                            "session_id": session_id,
+                            "tool_calls": trace,
+                            "intent": intent,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            }
             yield {
                 "event": "error",
                 "data": json.dumps({"type": "error", "data": str(e)}, ensure_ascii=False),
@@ -510,7 +534,7 @@ async def debug_dispatch(query: str, current_user: db.User = Depends(get_current
         "confidence": decision.confidence,
         "reasoning": decision.reasoning,
         "extracted_order_id": decision.extracted_order_id,
-        "tools_available": [t.name for t in get_tools_for_intent(decision.intent)],
+        "tools_available": [t.name for t in await get_tools_for_intent(decision.intent)],
     }
 
 

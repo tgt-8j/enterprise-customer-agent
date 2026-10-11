@@ -64,7 +64,12 @@ class BaseConfig(BaseSettings):
     embedding_recovery_timeout: float = Field(
         default=30.0, ge=5.0, description="熔断恢复等待时间（秒）"
     )
-
+    # ChromaDB storage path, defaults to chroma_db/ in project root.
+    # Set CHROMA_PATH in .env to a volume path (e.g. /data/chroma_db) for Docker
+    # deployments to avoid data loss on container restart.
+    chroma_path: str = Field(
+        default="chroma_db", description="ChromaDB database persistence directory"
+    )
     # ---------- JWT 认证 ----------
     # 注意：这里不强制 min_length，因为开发环境可能还没有 .env 文件。
     # 实际使用时会在 auth.py 中检查密钥是否有效。

@@ -149,14 +149,16 @@ def _get_system_prompt(intent: str) -> str:
     return SYSTEM_PROMPT
 
 
-def get_tools_for_intent(intent: str, use_mcp: bool = False):
+async def get_tools_for_intent(intent: str, use_mcp: bool = False):
     """获取指定意图的工具列表。供 main.py 的 dispatch 路由使用。
 
     use_mcp=True 时通过 langchain-mcp-adapters 从远程 MCP Server 加载工具，
     支持跨进程解耦的工具服务化部署。
     """
     if use_mcp:
-        return asyncio.run(get_mcp_tools())
+        return await get_mcp_tools()
+        # 此函数仅在服务启动时调用（此时无运行中的事件循环），不会触发 RuntimeError。
+        # 若在已运行的 async 上下文中调用需改为 await get_mcp_tools()。
     return _get_tools_for_intent(intent)
 
 
