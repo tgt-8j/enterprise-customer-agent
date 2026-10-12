@@ -76,7 +76,6 @@ def _classify_by_keywords(
     return "chitchat", 0.5, "无匹配关键词，降级为闲聊"
 
 
-
 # 供 LangGraph 使用的 tool 接口
 async def _classify_by_llm(query: str) -> DispatchDecision:
     """LLM 兜底分类：关键词未命中或置信度不足时使用。"""
@@ -87,18 +86,24 @@ async def _classify_by_llm(query: str) -> DispatchDecision:
         from llm import get_llm
 
         llm = get_llm()
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是意图分类器。将用户 query 分类到以下一类：
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """你是意图分类器。将用户 query 分类到以下一类：
 query_order: 查询订单状态、物流信息
 knowledge_search: 咨询政策、规则、时效
 create_ticket: 需要人工介入、建工单
 chitchat: 闲聊、问候、其他
 输出格式：JSON {{\"intent\": \"...\", \"confidence\": 0.xx, \"reasoning\": \"...\"}}
-只输出 JSON，不解释。"""),
-            ("human", "{query}"),
-        ])
+只输出 JSON，不解释。""",
+                ),
+                ("human", "{query}"),
+            ]
+        )
         result = (prompt | llm | StrOutputParser()).invoke({"query": query})
         import json
+
         data = json.loads(result.strip())
         valid_intents = {"query_order", "knowledge_search", "create_ticket", "chitchat"}
         intent = data.get("intent", "chitchat")
@@ -112,16 +117,15 @@ chitchat: 闲聊、问候、其他
         )
     except Exception as e:
         logger.warning("LLM 意图分类失败，降级为 chitchat: %s", e)
-        return DispatchDecision(
-            intent="chitchat", confidence=0.5, reasoning=f"LLM 降级: {e}"
-        )
+        return DispatchDecision(intent="chitchat", confidence=0.5, reasoning=f"LLM 降级: {e}")
 
 
 # 备用：关键词未命中或低置信度时升级 LLM 判断
 
+
 async def classify_intent(query: str) -> DispatchDecision:
     """鎰忓浘鍒嗙被锛氬厛鍏抽敭璇嶈鍒欏揩閫熷尮閰嶏紝鏈獑鍛戒腑鎴栦綆缃�
-浜′俊搴︽椂鍗囩骇 LLM 鍒ゆ柇銆?
+    浜′俊搴︽椂鍗囩骇 LLM 鍒ゆ柇銆?
     """
     intent, confidence, reasoning = _classify_by_keywords(query)
     order_id = _extract_order_id(query) if intent == "query_order" else None
@@ -131,14 +135,18 @@ async def classify_intent(query: str) -> DispatchDecision:
         reasoning=reasoning,
         extracted_order_id=order_id,
     )
-    _nm = chr(0x65e0)+chr(0x5339)+chr(0x914)+chr(0x5173)+chr(0x8bcd)
+    _nm = chr(0x65E0) + chr(0x5339) + chr(0x914) + chr(0x5173) + chr(0x8BCD)
     if decision.confidence < 0.7 or _nm in decision.reasoning:
         llm_decision = await _classify_by_llm(query)
         if llm_decision.intent != "chitchat" or decision.confidence < 0.5:
             logger.info(
                 "鎰忓浘鍗囩骇 LLM: %s (keywords=%s, llm=%s)",
-                llm_decision.intent, decision.intent, llm_decision.reasoning,
+                llm_decision.intent,
+                decision.intent,
+                llm_decision.reasoning,
             )
             return llm_decision
     return decision
+
+
 classify_intent_tool = tool(classify_intent)

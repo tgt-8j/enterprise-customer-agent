@@ -9,7 +9,6 @@
 - test_user：测试用户，注册后立即返回 id，供其他 fixture 使用
 """
 
-
 import os as _os
 from unittest.mock import patch
 
@@ -64,7 +63,10 @@ _TEST_TOKEN = create_access_token(1)
 
 # 优先使用环境变量 DATABASE_URL，其次使用默认值
 # WSL2 环境中需要通过 host.docker.internal 访问 Windows 上的 Docker
-_TEST_DB_URL = _os.environ.get('DATABASE_URL', 'postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test')
+_TEST_DB_URL = _os.environ.get(
+    "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test"
+)
+
 
 def _db_available() -> bool:
     """检查 PostgreSQL 是否可用。"""
