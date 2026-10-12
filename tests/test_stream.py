@@ -88,14 +88,14 @@ async def test_get_tools_for_intent():
     """测试工具路由。"""
     from agent import get_tools_for_intent
 
-    tools = get_tools_for_intent("query_order")
+    tools = await get_tools_for_intent("query_order")
     assert len(tools) == 1
     assert tools[0].name == "query_order"
 
-    tools = get_tools_for_intent("chitchat")
+    tools = await get_tools_for_intent("chitchat")
     assert len(tools) == 0
 
-    tools = get_tools_for_intent("general")
+    tools = await get_tools_for_intent("general")
     assert len(tools) == 3
 
 
