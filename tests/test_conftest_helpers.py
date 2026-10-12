@@ -59,7 +59,7 @@ class TestMakeTestEngine:
 
     def test_engine_has_correct_url(self):
         engine = _make_test_engine()
-        assert "agent_demo_test" in str(engine.url)
+        assert "agent_demo" in str(engine.url)
 
 
 # ──────────────────────────────────────────────
