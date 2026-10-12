@@ -128,8 +128,8 @@ async def test_get_mcp_tools_success():
 
     # 因为 MultiServerMCPClient 是在 agent.py 内部 import 的，
     # 所以 patch 源头模块
-    with patch("langchain_mcp_adapters.client.MultiServerMCPClient") as mock_client:
-        mock_client.return_value = mock_client
+    with patch("langchain_mcp_adapters.client.MultiServerMCPClient") as mock_mcp_client:
+        mock_mcp_client.return_value = mock_client
         tools = await get_mcp_tools()
         assert len(tools) == 1
         assert tools[0].name == "query_order"
