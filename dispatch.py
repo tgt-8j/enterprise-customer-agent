@@ -11,15 +11,14 @@
     decision = await classify_intent.ainvoke("查一下订单9527的物流")
 """
 
+import logging
 import re
 from typing import Literal
-import logging
-
-logger = logging.getLogger(__name__)
-
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class DispatchDecision(BaseModel):
@@ -82,9 +81,10 @@ def _classify_by_keywords(
 async def _classify_by_llm(query: str) -> DispatchDecision:
     """LLM 兜底分类：关键词未命中或置信度不足时使用。"""
     try:
-        from llm import get_llm
-        from langchain_core.prompts import ChatPromptTemplate
         from langchain_core.output_parsers import StrOutputParser
+        from langchain_core.prompts import ChatPromptTemplate
+
+        from llm import get_llm
 
         llm = get_llm()
         prompt = ChatPromptTemplate.from_messages([

@@ -9,6 +9,8 @@
 - test_user：测试用户，注册后立即返回 id，供其他 fixture 使用
 """
 
+
+import os as _os
 from unittest.mock import patch
 
 import pytest
@@ -49,8 +51,9 @@ async def _fake_get_current_user(credentials=None):
 auth.get_current_user = _fake_get_current_user  # Patch before app is imported
 
 import db  # noqa: E402 - must be after auth patch
-from auth import create_access_token, hash_password  # noqa: E402
 import main  # noqa: E402 - need to patch main's binding too
+from auth import create_access_token, hash_password  # noqa: E402
+
 main.get_current_user = _fake_get_current_user  # from-import binds separately in main
 from main import app  # noqa: E402
 
@@ -58,9 +61,9 @@ from main import app  # noqa: E402
 # compatibility issues when called multiple times in pytest async fixtures.
 _TEST_TOKEN = create_access_token(1)
 
+
 # 优先使用环境变量 DATABASE_URL，其次使用默认值
 # WSL2 环境中需要通过 host.docker.internal 访问 Windows 上的 Docker
-import os as _os
 _TEST_DB_URL = _os.environ.get('DATABASE_URL', 'postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test')
 
 def _db_available() -> bool:

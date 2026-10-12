@@ -11,25 +11,30 @@
   因此通过 tests.conftest._orig_get_current_user 获取原始函数引用。
 """
 
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
+from fastapi import HTTPException
 
 from auth import (
+    _decode,
     blacklist_token,
     create_access_token,
     create_refresh_token,
     decode_token,
     hash_password,
     verify_password,
-    _decode,
 )
-from fastapi import HTTPException
 
 # conftest 在导入时会 patch auth.get_current_user，此处保存原始引用
 from tests.conftest import (
     _orig_get_current_user as _get_current_user_orig,
+)
+from tests.conftest import (
     _orig_get_optional_user as _get_optional_user_orig,
+)
+from tests.conftest import (
     _orig_require_admin as _require_admin_orig,
 )
 
@@ -113,13 +118,13 @@ class TestDecodeExceptions:
         assert exc_info.value.status_code == 401
 
     def test_decode_expired_token_raises(self):
+
         from jose import jwt
-        from datetime import timezone as tz
 
         payload = {
             "sub": "1",
             "type": "access",
-            "exp": datetime.now(tz.utc) - timedelta(hours=1),
+            "exp": datetime.now(UTC) - timedelta(hours=1),
         }
         expired = jwt.encode(payload, "test_secret_for_coverage", algorithm="HS256")
         with patch("auth.settings.jwt_secret_key", "test_secret_for_coverage"):
@@ -131,6 +136,7 @@ class TestDecodeExceptions:
 # ──────────────────────────────────────────────
 # helper 函数（供 TestGetCurrentUser / TestGetOptionalUser 复用）
 # ──────────────────────────────────────────────
+
 
 def _make_creds(token_value: str = "valid.bearer.token"):
     creds = MagicMock()

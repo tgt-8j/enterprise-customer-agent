@@ -1,7 +1,8 @@
 """流式 Agent 测试：验证 astream_events 事件格式。"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from langchain_core.messages import HumanMessage
 
 from agent import build_agent
@@ -127,8 +128,8 @@ async def test_get_mcp_tools_success():
 
     # 因为 MultiServerMCPClient 是在 agent.py 内部 import 的，
     # 所以 patch 源头模块
-    with patch("langchain_mcp_adapters.client.MultiServerMCPClient") as MockClient:
-        MockClient.return_value = mock_client
+    with patch("langchain_mcp_adapters.client.MultiServerMCPClient") as mock_client:
+        mock_client.return_value = mock_client
         tools = await get_mcp_tools()
         assert len(tools) == 1
         assert tools[0].name == "query_order"
@@ -140,6 +141,9 @@ async def test_get_mcp_tools_fallback():
     from agent import get_mcp_tools
     from tools import ALL_TOOLS
 
-    with patch("langchain_mcp_adapters.client.MultiServerMCPClient", side_effect=Exception("Connection failed")):
+    with patch(
+        "langchain_mcp_adapters.client.MultiServerMCPClient",
+        side_effect=Exception("Connection failed"),
+    ):
         tools = await get_mcp_tools()
         assert len(tools) == len(ALL_TOOLS)

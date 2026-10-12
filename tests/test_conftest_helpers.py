@@ -6,9 +6,9 @@
 - _make_test_engine（engine 创建）
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from tests.conftest import _fake_get_current_user, _make_test_engine
@@ -21,6 +21,7 @@ class TestFakeGetCurrentUser:
     @pytest.mark.asyncio
     async def test_none_credentials_raises(self):
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc_info:
             await _fake_get_current_user(credentials=None)
         assert exc_info.value.status_code == 401
@@ -28,6 +29,7 @@ class TestFakeGetCurrentUser:
     @pytest.mark.asyncio
     async def test_missing_bearer_prefix_raises(self):
         from fastapi import HTTPException
+
         creds = MagicMock()
         creds.credentials = "NotABearerToken"
         with pytest.raises(HTTPException) as exc_info:
@@ -67,6 +69,7 @@ class TestDbAvailable:
     def test_returns_false_when_db_unreachable(self):
         """当数据库不可达时，_db_available 返回 False。"""
         from tests.conftest import _db_available
+
         # 用一个明显不存在的端口
         with patch("tests.conftest._TEST_DB_URL", "postgresql+asyncpg://x:x@localhost:19999/x"):
             result = _db_available()

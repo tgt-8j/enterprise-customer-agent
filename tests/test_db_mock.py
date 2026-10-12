@@ -6,8 +6,9 @@
 - get_user_by_email / create_user / load_history / save_message / clear_session 的 mock 验证
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import db
 from db import ChatMessage
@@ -69,10 +70,12 @@ class TestEnsureTables:
         db._tables_ready = False
         try:
             mock_conn = MagicMock()
+
             # run_sync is called internally by engine.begin context manager
             # it should work with a regular coroutine
             async def fake_run_sync(fn, *args, **kwargs):
                 fn(mock_conn, *args, **kwargs)
+
             mock_conn.run_sync = MagicMock(side_effect=fake_run_sync)
 
             mock_begin_ctx = MagicMock()
@@ -153,7 +156,7 @@ class TestCreateUser:
         with patch("db.session_scope") as mock_scope:
             mock_scope.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_scope.return_value.__aexit__ = AsyncMock(return_value=None)
-            user = await db.create_user(
+            await db.create_user(
                 email="new@example.com",
                 password_hash="hashed",
                 name="New User",

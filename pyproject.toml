@@ -10,7 +10,7 @@ target-version = "py312"
 line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "SIM"]
-ignore = ["E501", "B008", "B904", "UP042", "SIM105", "SIM117"]
+ignore = ["E501", "B008", "B904", "UP042", "SIM102", "SIM105", "SIM117"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agent", "auth", "config", "db", "llm", "main", "metrics", "rag", "tools"]

@@ -17,7 +17,7 @@
         ...
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -37,9 +37,33 @@ _BCRYPT_ROUNDS = 12
 # 这样 /health、/metrics、/api/auth/* 可以不加认证。
 security = HTTPBearer(auto_error=False)
 
-# ---------- 令牌黑名单（内存版） ----------
-# 生产环境多实例时应替换为 Redis，接口保持不变。
-_access_token_blacklist: set[str] = set()
+
+# ---------- Token blacklist abstract interface ----------
+# Default: in-memory set (single-instance). Multi-instance: inject Redis via set_blacklist_backend().
+class _BlacklistBackend:
+    """In-memory token blacklist (default for single instance)."""
+
+    def __init__(self):
+        self._tokens: set[str] = set()
+
+    def add(self, token: str) -> None:
+        self._tokens.add(token)
+
+    def contains(self, token: str) -> bool:
+        return token in self._tokens
+
+    def clear(self) -> None:
+        self._tokens.clear()
+
+
+# Global blacklist backend instance (replace with Redis via set_blacklist_backend for multi-instance)
+_blacklist_backend: _BlacklistBackend = _BlacklistBackend()
+
+
+def set_blacklist_backend(backend) -> None:
+    """Replace blacklist backend (inject Redis for multi-instance deployment)."""
+    global _blacklist_backend
+    _blacklist_backend = backend
 
 
 # ---------- 密码操作 ----------
@@ -72,7 +96,7 @@ def create_access_token(
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.access_token_expire_minutes)
 
-    expire = datetime.now(timezone.utc) + expires_delta
+    expire = datetime.now(UTC) + expires_delta
     payload = {"sub": str(subject), "type": "access", "exp": expire}
     if extra_claims:
         payload.update(extra_claims)
@@ -81,7 +105,7 @@ def create_access_token(
 
 def create_refresh_token(subject: int) -> str:
     """生成 refresh token（默认 7 天有效期）。"""
-    expire = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    expire = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
     payload = {"sub": str(subject), "type": "refresh", "exp": expire}
     return _encode(payload)
 
@@ -112,12 +136,12 @@ def _decode(token: str) -> dict:
 
 def blacklist_token(token: str) -> None:
     """将 token 加入黑名单（注销时使用）。"""
-    _access_token_blacklist.add(token)
+    _blacklist_backend.add(token)
 
 
 def decode_token(token: str) -> dict:
     """解码并验证 token（签名、过期时间、黑名单）。"""
-    if token in _access_token_blacklist:
+    if _blacklist_backend.contains(token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="令牌已失效",

@@ -46,9 +46,9 @@ from auth import (
     verify_password,
 )
 from config import settings
-from dispatch import classify_intent
-from constraints.validator import ConstraintValidator
 from constraints.auto_fixer import AutoFixer
+from constraints.validator import ConstraintValidator
+from dispatch import classify_intent
 from logging_config import setup_logging
 from metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
 
@@ -77,12 +77,11 @@ _DEMO_DIR = Path(__file__).parent / "demo"
 if _DEMO_DIR.is_dir():
     app.mount("/demo", StaticFiles(directory=str(_DEMO_DIR), html=True), name="demo")
 
+
 @lru_cache(maxsize=16)
 def get_agent(intent: str = "general", use_mcp: bool = False):
     """Get agent for intent, cached up to 16 entries by (intent, use_mcp)."""
     return build_agent(intent=intent, use_mcp=use_mcp)
-
-
 
 
 # ---------- 请求/响应模型 ----------
@@ -338,6 +337,7 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
             if tc.tool_name == "create_ticket":
                 try:
                     import json as _json
+
                     parsed = _json.loads(tc.tool_output)
                     if isinstance(parsed, dict) and parsed.get("ticket_id"):
                         ticket_id = str(parsed["ticket_id"])
@@ -351,7 +351,9 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
     }
     vresult = _constraint_validator.validate_output(intent, final_reply, context=validation_ctx)
     if vresult.auto_fixable:
-        fixed_reply = _auto_fixer.fix_output(final_reply, vresult.auto_fixable, context=validation_ctx)
+        fixed_reply = _auto_fixer.fix_output(
+            final_reply, vresult.auto_fixable, context=validation_ctx
+        )
         if fixed_reply != final_reply:
             logger.info(
                 "约束验证已自动修复输出",
@@ -367,7 +369,8 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
             extra={
                 "violations": [
                     {"rule": v.rule, "detail": v.detail}
-                    for v in vresult.violations if v.severity == "error"
+                    for v in vresult.violations
+                    if v.severity == "error"
                 ],
             },
         )

@@ -84,9 +84,7 @@ class ConstraintValidator:
         agents = self._config.get("agents", {})
         return agents.get(agent_id, {})
 
-    def validate_tool_call(
-        self, agent_id: str, tool_name: str
-    ) -> ValidationResult:
+    def validate_tool_call(self, agent_id: str, tool_name: str) -> ValidationResult:
         """
         验证某 Agent 是否可以调用指定工具。
 
@@ -139,12 +137,12 @@ class ConstraintValidator:
         agent_cfg = self._get_agent_config(agent_id)
         common_cfg = self._config.get("common", {})
 
-        output_constraints = (
-            agent_cfg.get("output_constraints") or []
-        ) + (common_cfg.get("output_constraints") or [])
-        forbidden_actions = (
-            agent_cfg.get("forbidden_actions") or []
-        ) + (common_cfg.get("safety_rules") or [])
+        output_constraints = (agent_cfg.get("output_constraints") or []) + (
+            common_cfg.get("output_constraints") or []
+        )
+        forbidden_actions = (agent_cfg.get("forbidden_actions") or []) + (
+            common_cfg.get("safety_rules") or []
+        )
 
         violations: list[Violation] = []
         auto_fixable: list[str] = []
@@ -193,19 +191,17 @@ class ConstraintValidator:
         # ---- 检查 output_constraints ----
         max_len = self._get_constraint_value(output_constraints, "max_response_length")
         if max_len is not None and len(output) > max_len:
-                violations.append(
-                    Violation(
-                        rule="max_response_length",
-                        severity="warning",
-                        detail=f"输出长度 {len(output)} 超过限制 {max_len} 字",
-                    )
+            violations.append(
+                Violation(
+                    rule="max_response_length",
+                    severity="warning",
+                    detail=f"输出长度 {len(output)} 超过限制 {max_len} 字",
                 )
-                auto_fixable.append("truncate_output")
+            )
+            auto_fixable.append("truncate_output")
 
         if "must_include_ticket_id_if_ticket_created" in output_constraints:
-            if context.get("ticket_created") and not _TICKET_ID_RE.search(
-                output
-            ):
+            if context.get("ticket_created") and not _TICKET_ID_RE.search(output):
                 violations.append(
                     Violation(
                         rule="must_include_ticket_id",
@@ -217,9 +213,7 @@ class ConstraintValidator:
 
         if "must_cite_policy_source" in output_constraints:
             # 如果输出包含政策相关内容但没有来源标注
-            if re.search(
-                r"(退货|退款|换货|发票|7天|无理由|政策|规则)", output
-            ):
+            if re.search(r"(退货|退款|换货|发票|7天|无理由|政策|规则)", output):
                 if not _POLICY_SOURCE_RE.search(output):
                     violations.append(
                         Violation(
@@ -249,9 +243,7 @@ class ConstraintValidator:
         )
 
     @staticmethod
-    def _get_constraint_value(
-        constraints: list[str | dict], key: str
-    ) -> Any | None:
+    def _get_constraint_value(constraints: list[str | dict], key: str) -> Any | None:
         """从约束列表中提取带值的约束（如 max_response_length: 1500）。"""
         for c in constraints:
             if isinstance(c, dict) and key in c:

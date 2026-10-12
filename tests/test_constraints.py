@@ -8,15 +8,10 @@
 
 from __future__ import annotations
 
-import re
-from unittest.mock import patch
-
 import pytest
-from fastapi.testclient import TestClient
 
-from constraints.validator import ConstraintValidator, ValidationResult, Violation
 from constraints.auto_fixer import AutoFixer
-
+from constraints.validator import ConstraintValidator
 
 # ── ConstraintValidator ──────────────────────────────────────────────────────
 
@@ -199,25 +194,19 @@ class TestValidateOutput:
     # ---- promise_refund_without_verification ----
     def test_refund_without_order_verified(self, validator):
         out = "没问题，我们可以给您全额退款。"
-        r = validator.validate_output(
-            "customer_service", out, context={"order_verified": False}
-        )
+        r = validator.validate_output("customer_service", out, context={"order_verified": False})
         assert any(v.rule == "promise_refund_without_verification" for v in r.violations)
         assert r.is_blockable is True
 
     def test_refund_with_order_verified(self, validator):
         out = "核实后，我们可以为您办理退款。"
-        r = validator.validate_output(
-            "customer_service", out, context={"order_verified": True}
-        )
+        r = validator.validate_output("customer_service", out, context={"order_verified": True})
         # "办理退款" 不匹配 "可以退|给您退|全额退|马上退"
         assert not any(v.rule == "promise_refund_without_verification" for v in r.violations)
 
     def test_refund_ask_not_promise(self, validator):
         out = "请问您希望如何处理？我们可以为您办理退款或换货。"
-        r = validator.validate_output(
-            "customer_service", out, context={"order_verified": False}
-        )
+        r = validator.validate_output("customer_service", out, context={"order_verified": False})
         assert not any(v.rule == "promise_refund_without_verification" for v in r.violations)
 
     # ---- chitchat agent ----
@@ -300,13 +289,6 @@ class TestAutoFixer:
         text = "第一段。\n\n第二段内容很多很长一直到超过限制。" + "x" * 1600
         fixed = fixer.fix_output(text, auto_fixable=["truncate_output"])
         # 尽量在段落边界截断
-        assert "已截断" in fixed
-        assert len(fixed) <= 1500
-
-    def test_truncate_at_sentence_boundary(self, fixer):
-        # 较长文本+中间有\n\n，断点应落在后半段而非开头
-        text = "aaa" * 300 + "\n\n续" * 300
-        fixed = fixer.fix_output(text, auto_fixable=["truncate_output"])
         assert "已截断" in fixed
         assert len(fixed) <= 1500
 

@@ -26,11 +26,11 @@ V7 增强：
 不会卡住 FastAPI 的事件循环（详见 tools.py 里 search_knowledge 的注释）。
 """
 
-from functools import lru_cache
 import logging
 import os
 import time
 from enum import Enum
+from functools import lru_cache
 
 import chromadb
 import httpx

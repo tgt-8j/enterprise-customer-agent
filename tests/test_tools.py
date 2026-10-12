@@ -13,7 +13,7 @@ import pytest
 
 import db
 import rag
-from tools import query_order, search_knowledge, create_ticket, ALL_TOOLS
+from tools import ALL_TOOLS, create_ticket, query_order, search_knowledge
 
 
 class TestQueryOrder:
@@ -130,7 +130,9 @@ class TestCreateTicket:
                 mock_ticket_obj.reason = "物流异常"
                 mock_ticket_obj.status = "待处理"
                 with patch.object(db, "Ticket", return_value=mock_ticket_obj):
-                    result = await create_ticket.ainvoke({"order_id": "12345", "reason": "物流异常"})
+                    result = await create_ticket.ainvoke(
+                        {"order_id": "12345", "reason": "物流异常"}
+                    )
                 assert isinstance(result, str)
                 data = json.loads(result)
                 assert data["ticket_id"] == 1001

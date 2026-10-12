@@ -12,14 +12,14 @@ from pathlib import Path
 # 确保项目根目录在 PYTHONPATH 中（scripts/ 不在根目录）
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from constraints.validator import ConstraintValidator
 from constraints.auto_fixer import AutoFixer
+from constraints.validator import ConstraintValidator
 
 
 def section(title: str):
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {title}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 def main():
@@ -45,15 +45,16 @@ def main():
     normal_reply = "您的订单9527目前在转运中心，预计1-3天内送达，请耐心等待。"
     r = validator.validate_output("customer_service", normal_reply)
     print(f"  输出: {normal_reply[:50]}...")
-    print(f"  结果: {'✓ 通过' if r.valid else '✗ 阻断'} | 违规: {len(r.violations)} | 可修复: {r.auto_fixable}")
+    print(
+        f"  结果: {'✓ 通过' if r.valid else '✗ 阻断'} | 违规: {len(r.violations)} | 可修复: {r.auto_fixable}"
+    )
 
     # ── 输出验证：工单号缺失（可自动修复）───────────────────────
     section("3. 工单创建后未带工单号（自动修复）")
 
     ticket_reply = "您的工单已受理，我们会尽快处理，请保持电话畅通。"
     r = validator.validate_output(
-        "customer_service", ticket_reply,
-        context={"ticket_created": True, "ticket_id": "TC123456"}
+        "customer_service", ticket_reply, context={"ticket_created": True, "ticket_id": "TC123456"}
     )
     print(f"  原始输出: {ticket_reply}")
     print(f"  违规: {[v.rule for v in r.violations]}")
@@ -87,8 +88,7 @@ def main():
 
     refund_reply = "没问题，我们可以给您全额退款。"
     r = validator.validate_output(
-        "customer_service", refund_reply,
-        context={"order_verified": False}
+        "customer_service", refund_reply, context={"order_verified": False}
     )
     print(f"  输出: {refund_reply}")
     print(f"  结果: {'✓ 通过' if r.valid else '✗ 阻断'} (is_blockable={r.is_blockable})")
@@ -132,9 +132,9 @@ def main():
         has_guarantee = "保证" in fixed or "一定" in fixed
         print(f"  绝对化用语已清除: {not has_guarantee}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  演示完毕")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":
