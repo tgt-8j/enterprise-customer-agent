@@ -18,3 +18,4 @@ prometheus-client>=0.20.0          # Prometheus 指标
 sse-starlette>=1.8.0               # SSE 流式输出
 langchain-mcp-adapters>=0.2.0      # MCP 工具接入协议
 fastmcp>=3.0.0                      # MCP server 框架
+greenlet>=3.0
