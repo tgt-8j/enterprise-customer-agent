@@ -436,40 +436,40 @@ class TestResponseHeaders:
 # ──────────────────────────────────────────────
 class TestGetAgent:
     def test_get_agent_cache_hit(self):
-        """已缓存的 agent 直接返回。"""
-        from main import _agent_cache, get_agent
+        """Cache-hit: returns the previously built agent."""
+        from main import get_agent
 
         agent = MagicMock()
-        _agent_cache["general"] = agent
+        with patch("main.build_agent", return_value=agent):
+            result = get_agent("general")
+        assert result is agent
         result = get_agent("general")
         assert result is agent
-        # 清理
-        _agent_cache.pop("general", None)
+        get_agent.cache_clear()
 
     def test_get_agent_cache_miss(self):
-        """未缓存时创建新 agent。"""
+        """On cache miss, builds a new agent and caches it."""
         import os
 
-        from main import _agent_cache, get_agent
+        from main import get_agent
 
-        # 确保不使用 MCP
+        # ensure MCP is not used
         old_mcp = os.environ.get("USE_MCP")
         os.environ["USE_MCP"] = "false"
         try:
+            get_agent.cache_clear()
             result = get_agent("general")
             assert result is not None
-            assert "general" in _agent_cache
+            info = get_agent.cache_info()
+            assert info.currsize >= 1
         finally:
             if old_mcp is not None:
                 os.environ["USE_MCP"] = old_mcp
             else:
                 os.environ.pop("USE_MCP", None)
-            _agent_cache.pop("general", None)
+            get_agent.cache_clear()
 
 
-# ──────────────────────────────────────────────
-# refresh 端点异常路径
-# ──────────────────────────────────────────────
 class TestRefreshErrors:
     def test_refresh_wrong_token_type(self, client):
         """refresh token 类型不是 refresh 时返回 401。"""
