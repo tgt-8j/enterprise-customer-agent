@@ -230,7 +230,7 @@
   <div class="header">
     <h1>🤖 企业客服 Agent <span class="badge">LangGraph + RAG + SSE</span></h1>
     <div class="api-config">
-      <input id="api-url" type="text" placeholder="API 地址，如 http://localhost:8080" value="http://localhost:8080" />
+      <input id="api-url" type="text" placeholder="API 地址，如 http://localhost:8080" />
       <button onclick="connectAPI()">连接</button>
       <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
         <input type="checkbox" id="stream-mode" checked /> 流式输出
@@ -269,8 +269,15 @@
 <script>
 let sessionId = null;
 let token = null;
-let apiUrl = 'http://localhost:8080';
+// refresh token 与 access token 一样只放内存：刷新页面即自动重登，不把凭据落盘。
+let refreshToken = null;
+// 默认同源：页面挂在哪个 host:port 就打哪个，README 的 8080 和 api.md 的 8000 都对得上。
+// 直接双击打开（file://）时没有 origin，回退到 8080。
+let apiUrl = (location.protocol === 'http:' || location.protocol === 'https:')
+  ? location.origin
+  : 'http://localhost:8080';
 let isProcessing = false;
+document.getElementById('api-url').value = apiUrl;
 
 async function setStatus(msg, type) {
   const bar = document.getElementById('status-bar');
@@ -297,6 +304,7 @@ async function registerOrLogin() {
     if (loginRes.ok) {
       const data = await loginRes.json();
       token = data.access_token;
+      refreshToken = data.refresh_token;
       return;
     }
     const regRes = await fetch(apiUrl + '/api/auth/register', {
@@ -307,9 +315,49 @@ async function registerOrLogin() {
     if (!regRes.ok) throw new Error('注册失败: HTTP ' + regRes.status);
     const data = await regRes.json();
     token = data.access_token;
+    refreshToken = data.refresh_token;
   } catch (e) {
     throw new Error('认证失败：' + e.message + '，请先确保后端服务已启动');
   }
+}
+
+// access token 只有 15 分钟。401 时先用 refresh_token 换新的再重试一次；
+// refresh 也失效就自动重登（demo 用户固定），仍失败才把 401 交给调用方。
+async function recoverSession() {
+  if (refreshToken) {
+    try {
+      const res = await fetch(apiUrl + '/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        token = data.access_token;
+        refreshToken = data.refresh_token;
+        return true;
+      }
+    } catch (e) {
+      // 网络类错误：落到下面的重新登录
+    }
+  }
+  try {
+    await registerOrLogin();
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// 所有需要鉴权的请求都走这里：自动带 token，401 自动恢复并重试一次。
+async function apiFetch(path, opts = {}, retried = false) {
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(apiUrl + path, Object.assign({}, opts, { headers }));
+  if (res.status !== 401 || retried) return res;
+  const recovered = await recoverSession();
+  if (!recovered) return res;
+  return apiFetch(path, opts, true);
 }
 
 async function connectAPI() {
@@ -354,13 +402,7 @@ async function sendMessage() {
 
 async function sendMessageBlock(text) {
   const body = { message: text, session_id: sessionId };
-  const opts = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  };
-  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(apiUrl + '/chat', opts);
+  const res = await apiFetch('/chat', { method: 'POST', body: JSON.stringify(body) });
   if (!res.ok) {
     const errText = await res.text();
     throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 200));
@@ -373,13 +415,7 @@ async function sendMessageBlock(text) {
 
 async function sendMessageStream(text) {
   const body = { message: text, session_id: sessionId };
-  const opts = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  };
-  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(apiUrl + '/chat_stream', opts);
+  const res = await apiFetch('/chat_stream', { method: 'POST', body: JSON.stringify(body) });
   if (!res.ok) {
     const errText = await res.text();
     throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 200));

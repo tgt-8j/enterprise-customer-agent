@@ -82,17 +82,20 @@ _INTENT_TO_CONSTRAINT_AGENT = {
     "create_ticket": "customer_service",
     "chitchat": "chitchat",
 }
-# CORS：仅放行本地开发的几个 origin（含 :3000 前端 dev server 与 :8000 自身）。
-# 注意：以 file:// 打开 demo/index.html 时浏览器 Origin 为 "null"，会被这些
-# allow_origins 拦下 —— 本地跑 demo 请用 http://localhost:8000/demo/index.html
-# （见下方 StaticFiles 挂载），而不是直接双击 html 文件。
+# CORS：仅放行本地开发的几个 origin（:3000 前端 dev server、:8000 与 :8080）。
+# demo/index.html 默认同源请求（apiUrl 取 location.origin），这三个端口都能直连；
+# 只有把页面挂在一个端口、把 API 地址填成另一个端口时才需要这份白名单。
+# 注意：以 file:// 打开时浏览器 Origin 是 "null"，会被拦下 —— 请通过
+# http://localhost:<port>/demo/index.html 访问（StaticFiles 已挂载）。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:8000",
+        "http://localhost:8080",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8000",
+        "http://127.0.0.1:8080",
     ],
     allow_credentials=True,
     allow_methods=["*"],

@@ -67,3 +67,16 @@ class TestAuthProtection:
     def test_metrics_no_auth_required(self, client_no_auth):
         response = client_no_auth.get("/metrics")
         assert response.status_code == 200
+
+
+# ──────────────────────────────────────────────
+# CORS：demo 页默认同源，但换端口访问时要能过白名单
+# ──────────────────────────────────────────────
+class TestCORS:
+    def test_demo_origin_8080_allowed(self, client_no_auth):
+        """README 用 8080 起服务，白名单必须包含它。"""
+        response = client_no_auth.get("/health", headers={"Origin": "http://localhost:8080"})
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:8080"
+        # 不在白名单的 origin 不应被放行
+        blocked = client_no_auth.get("/health", headers={"Origin": "http://evil.example"})
+        assert blocked.headers.get("access-control-allow-origin") is None

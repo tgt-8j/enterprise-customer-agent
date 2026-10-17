@@ -3,7 +3,7 @@
 > 基于 LangGraph + RAG 的企业客服 Agent，支持订单查询、知识库检索和工单创建。手写 LangGraph 工作流实现 ReAct 循环，测试与 CI 均通过。
 
 ```
-271 tests · Python 3.12（21 个 DB 用例在未启动 PostgreSQL 时自动 skip）
+272 tests · Python 3.12（21 个 DB 用例在未启动 PostgreSQL 时自动 skip）
 ```
 
 ## 场景演示
@@ -146,7 +146,7 @@ docker compose --profile mcp up -d      # mcp_server 监听 8001
 ## 测试与评测
 
 ```bash
-# 单元测试（271 个；未启动 PostgreSQL 时 21 个 DB 用例自动 skip）
+# 单元测试（272 个；未启动 PostgreSQL 时 21 个 DB 用例自动 skip）
 pytest tests/ -v
 
 # AI 行为评测（26 个场景化用例，需要真实 LLM + 已建知识库）
@@ -192,7 +192,7 @@ enterprise-customer-agent/
 │   ├── verify_mcp.py    # MCP 专项验证
 │   └── verify_constraints.py  # 约束验证演示
 │
-├── tests/               # 单元测试（271 个，DB 用例需 Postgres）
+├── tests/               # 单元测试（272 个，DB 用例需 Postgres）
 │   ├── test_fastapi.py  # FastAPI 层测试
 │   ├── test_main_mock.py  # 端点级 mock 测试（含约束拦截、SSE 终态）
 │   ├── test_constraints.py  # 约束验证与自动修复
