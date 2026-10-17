@@ -4,7 +4,10 @@ pytest-cov>=4.0.0
 pytest-mock>=3.10.0
 httpx>=0.25.0
 # 工具版本必须锁定：ruff format 的输出和 mypy 的诊断在不同版本间会变，
-# 不锁版本会出现「本地过、CI 红」（此前 CI 最近 4 次全红就是这个原因之一）。
+# 不锁版本会出现「本地过、CI 红」。
 ruff==0.16.10
 mypy==2.3.0
+# PyYAML 自身不带类型存根，必须显式装 stubs，否则 CI 的干净环境里
+# mypy 会报 "Library stubs not installed for yaml"（本地恰好装过所以看不出来）。
+types-PyYAML==6.0.12.20260906
 pytest-factoryboy  # 可选：用于更复杂的 fixture 管理
