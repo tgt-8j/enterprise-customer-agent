@@ -131,7 +131,8 @@ Agent 核心接口。支持多轮对话：不传 `session_id` 则自动生成新
   ],
   "session_id": "abc123...",
   "intent": "query_order",
-  "blocked": false
+  "blocked": false,
+  "blocked_rules": []
 }
 ```
 
@@ -145,6 +146,7 @@ Agent 核心接口。支持多轮对话：不传 `session_id` 则自动生成新
 | session_id | string | 会话 ID，多轮对话时传入上轮的 session_id 以续接上下文 |
 | intent | string | 意图分发结果：`query_order` / `knowledge_search` / `create_ticket` / `chitchat` |
 | blocked | bool | 是否命中 error 级约束、回复被替换为安全话术 |
+| blocked_rules | array | 命中并导致替换的 error 级规则名（如 `["ask_for_password_or_ssn"]`），未拦截时为空数组；规则定义见 `src/constraints/constraints.yaml` |
 
 **响应头：**
 - `X-Process-Time` — 本次请求耗时（毫秒）
@@ -166,7 +168,7 @@ Agent 核心接口。支持多轮对话：不传 `session_id` 则自动生成新
 | `{"type":"token","data":"..."}` | LLM 增量文本 |
 | `{"type":"tool_call","data":{"name":"query_order","status":"start","input":{...}}}` | 工具开始 |
 | `{"type":"tool_call","data":{"name":"query_order","status":"end"}}` | 工具结束 |
-| `{"type":"done","data":{"session_id":"...","tool_calls":[...],"intent":"query_order","reply":"最终文本","blocked":false}}` | 本轮结束 |
+| `{"type":"done","data":{"session_id":"...","tool_calls":[...],"intent":"query_order","reply":"最终文本","blocked":false,"blocked_rules":[]}}` | 本轮结束；被拦截时 `blocked=true` 且 `blocked_rules` 列出触发的规则名 |
 | `{"type":"error","data":"错误信息"}` | 流式过程中出错 |
 
 > **`done.data.reply` 才是最终文本。** 约束校验（补工单号、截断、软化绝对化用语）和 error 级拦截都发生在最后一个 token 之后，

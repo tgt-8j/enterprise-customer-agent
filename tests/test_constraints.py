@@ -584,51 +584,54 @@ class TestConstraintBlocking:
     def test_unfixable_error_is_blocked(self):
         from src.api.app import BLOCKED_REPLY, apply_constraints
 
-        reply, blocked = apply_constraints("query_order", "请提供您的密码。", {})
-        assert blocked is True
-        assert reply == BLOCKED_REPLY
+        outcome = apply_constraints("query_order", "请提供您的密码。", {})
+        assert outcome.blocked is True
+        assert outcome.reply == BLOCKED_REPLY
+        assert outcome.rules == ["ask_for_password_or_ssn"]
 
     def test_refund_without_verified_order_is_blocked(self):
         from src.api.app import apply_constraints
 
-        _reply, blocked = apply_constraints(
+        outcome = apply_constraints(
             "query_order", "没问题，我们可以给您全额退款。", {"order_verified": False}
         )
-        assert blocked is True
+        assert outcome.blocked is True
+        assert "promise_refund_without_verification" in outcome.rules
 
     def test_refund_with_verified_order_is_not_blocked(self):
         from src.api.app import apply_constraints
 
-        reply, blocked = apply_constraints(
+        outcome = apply_constraints(
             "query_order", "核实订单后，可以给您全额退款。", {"order_verified": True}
         )
-        assert blocked is False
-        assert "退款" in reply
+        assert outcome.blocked is False
+        assert outcome.rules == []
+        assert "退款" in outcome.reply
 
     def test_autofix_runs_before_blocking(self):
         """只是少个工单号 → 补上就好，不该被拦。"""
         from src.api.app import apply_constraints
 
-        reply, blocked = apply_constraints(
+        outcome = apply_constraints(
             "create_ticket",
             "已为您创建工单，稍后人工联系您。",
             {"ticket_created": True, "ticket_id": "42", "order_verified": True},
         )
-        assert blocked is False
-        assert "42" in reply
+        assert outcome.blocked is False
+        assert "42" in outcome.reply
 
     def test_warning_only_violation_is_not_blocked(self):
         from src.api.app import apply_constraints
 
-        reply, blocked = apply_constraints("query_order", "我们保证明天一定送达。", {})
-        assert blocked is False
-        assert "保证" not in reply
+        outcome = apply_constraints("query_order", "我们保证明天一定送达。", {})
+        assert outcome.blocked is False
+        assert "保证" not in outcome.reply
 
     def test_ordinary_digits_do_not_trigger_blocking(self):
         """回归用例：48小时 / 7天 之类数字不能触发「缺工单号」误拦。"""
         from src.api.app import apply_constraints
 
-        _reply, blocked = apply_constraints(
+        outcome = apply_constraints(
             "query_order", "退款将于 7 天内到账，共 3 个工作日。", {"order_verified": True}
         )
-        assert blocked is False
+        assert outcome.blocked is False

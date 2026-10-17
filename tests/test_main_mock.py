@@ -772,6 +772,8 @@ class TestConstraintBlocking:
         data = response.json()
         assert data["blocked"] is True
         assert data["reply"] == app_module.BLOCKED_REPLY
+        # 拦截原因要能回传到前端/审计，而不是只有一句"blocked"
+        assert data["blocked_rules"] == ["ask_for_password_or_ssn"]
         # 入库的也必须是安全话术，不能把违规文本留在历史里
         saved = mock_db.save_message.call_args_list[-1]
         assert saved.args[2] == app_module.BLOCKED_REPLY
@@ -898,3 +900,4 @@ class TestChatStreamDoneEvent:
         body = response.text
         assert '"blocked": true' in body
         assert app_module.BLOCKED_REPLY in body
+        assert '"ask_for_password_or_ssn"' in body

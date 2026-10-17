@@ -28,13 +28,13 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 import src.persistence.db as db
@@ -136,6 +136,8 @@ class ChatResponse(BaseModel):
     # 是否命中 error 级约束、回复被替换成安全话术。
     # 显式返回，便于前端/评测区分「正常回复」与「被拦截」。
     blocked: bool = False
+    # 被哪几条 error 级规则拦下（规则名与 constraints.yaml 一致），方便审计与演示。
+    blocked_rules: list[str] = Field(default_factory=list)
 
 
 class RegisterRequest(BaseModel):
@@ -420,16 +422,27 @@ def build_validation_context(tool_results: list[tuple[str, str]]) -> dict[str, A
     }
 
 
+class ConstraintOutcome(NamedTuple):
+    """约束校验的结果。
+
+    rules 只在 blocked=True 时有值：命中的 error 级规则名（与 constraints.yaml 一致），
+    用于日志审计、接口返回和 demo 上的"被哪条规则拦下"提示。
+    """
+
+    reply: str
+    blocked: bool
+    rules: list[str]
+
+
 def apply_constraints(
     intent: str,
     reply: str,
     context: dict[str, Any],
     log_extra: dict[str, Any] | None = None,
-) -> tuple[str, bool]:
+) -> ConstraintOutcome:
     """校验 → 自动修复 → 重新校验 → 仍阻断则替换成安全话术。
 
-    返回 (最终回复, 是否被阻断)。/chat 与 /chat_stream 共用这一份，
-    保证两个接口的约束行为完全一致。
+    /chat 与 /chat_stream 共用这一份，保证两个接口的约束行为完全一致。
     """
     agent_id = _INTENT_TO_CONSTRAINT_AGENT.get(intent, intent)
     result = _constraint_validator.validate_output(agent_id, reply, context=context)
@@ -451,11 +464,13 @@ def apply_constraints(
             result = _constraint_validator.validate_output(agent_id, reply, context=context)
 
     if result.is_blockable:
+        rules = [v.rule for v in result.violations if v.severity == "error"]
         AGENT_ERRORS_TOTAL.labels(error_type="constraint_blocked").inc()
         logger.warning(
             "约束验证发现阻断性违规，回复已替换为安全话术",
             extra={
                 **(log_extra or {}),
+                "blocked_rules": rules,
                 "violations": [
                     {"rule": v.rule, "detail": v.detail}
                     for v in result.violations
@@ -463,9 +478,9 @@ def apply_constraints(
                 ],
             },
         )
-        return BLOCKED_REPLY, True
+        return ConstraintOutcome(BLOCKED_REPLY, True, rules)
 
-    return reply, False
+    return ConstraintOutcome(reply, False, [])
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -554,12 +569,13 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
     # 约束验证：从工具真实返回推导上下文（订单是否真的查到了、工单是否真的建了），
     # 再校验输出、自动修复、必要时阻断。
     validation_ctx = build_validation_context(tool_results)
-    final_reply, blocked = apply_constraints(
+    outcome = apply_constraints(
         intent,
         str(final_reply),
         validation_ctx,
         log_extra={"session_id": session_id, "user_id": current_user.id},
     )
+    final_reply, blocked = outcome.reply, outcome.blocked
 
     # 本轮对话入库：只存 user 消息 + assistant 最终回复（中间工具过程不入库）
     # 记录会话归属：该 session 首次写入时把 owner 设为当前用户，后续沿用。
@@ -575,6 +591,7 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
             "tool_call_count": len(trace),
             "reply_length": len(final_reply),
             "blocked": blocked,
+            "blocked_rules": outcome.rules,
         },
     )
 
@@ -584,6 +601,7 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
         session_id=session_id,
         intent=intent,
         blocked=blocked,
+        blocked_rules=outcome.rules,
     )
 
 
@@ -727,12 +745,13 @@ async def chat_stream(
             # 与 /chat 完全共用同一份约束逻辑：推导上下文 → 校验 → 自动修复 →
             # 重新校验 → 必要时替换为安全话术。
             _vctx = build_validation_context(tool_results)
-            final_reply, blocked = apply_constraints(
+            _outcome = apply_constraints(
                 intent,
                 final_reply,
                 _vctx,
                 log_extra={"session_id": session_id, "user_id": current_user.id, "stream": True},
             )
+            final_reply, blocked = _outcome.reply, _outcome.blocked
 
             # 保存对话
             await db.save_message(session_id, "user", req.message, user_id=str(current_user.id))
@@ -755,6 +774,7 @@ async def chat_stream(
                             "intent": intent,
                             "reply": final_reply,
                             "blocked": blocked,
+                            "blocked_rules": _outcome.rules,
                         },
                     },
                     ensure_ascii=False,
@@ -784,6 +804,7 @@ async def chat_stream(
                             # 出错时把已生成的部分文本回传，前端不会停在"光标常驻"状态
                             "reply": final_reply,
                             "blocked": False,
+                            "blocked_rules": [],
                             "error": True,
                         },
                     },

@@ -124,6 +124,18 @@
       margin-left: 6px;
       vertical-align: middle;
     }
+    .blocked-badge {
+      display: inline-block;
+      font-size: 11px;
+      background: #fef2f2;
+      color: #b91c1c;
+      border: 1px solid #fecaca;
+      padding: 1px 8px;
+      border-radius: 10px;
+      margin-left: 6px;
+      vertical-align: middle;
+      opacity: 1;
+    }
     .typing {
       align-self: flex-start;
       padding: 10px 14px;
@@ -409,7 +421,7 @@ async function sendMessageBlock(text) {
   }
   const data = await res.json();
   sessionId = data.session_id;
-  appendMsg('agent', data.reply, data.tool_calls || [], data.intent);
+  appendMsg('agent', data.reply, data.tool_calls || [], data.intent, data.blocked, data.blocked_rules);
   if (data.blocked) setStatus('⚠️ 该回复命中安全约束，已替换为标准话术', 'warn');
 }
 
@@ -480,9 +492,6 @@ async function sendMessageStream(text) {
               content.textContent = finalReply;
               content.classList.remove('cursor');
             }
-            if (event.data.blocked) {
-              setStatus('⚠️ 该回复命中安全约束，已替换为标准话术', 'warn');
-            }
             // 添加工具调用轨迹
             if (toolCalls.length > 0) {
               const traceDiv = msgDiv.querySelector('.trace') || createTraceDiv(msgDiv);
@@ -493,6 +502,13 @@ async function sendMessageStream(text) {
             if (intent) {
               const meta = msgDiv.querySelector('.meta');
               if (meta) meta.textContent = 'Agent · 意图: ' + intent + ' · ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            }
+            // 拦截标记必须加在重写 meta 之后，否则会被上面那行 textContent 冲掉
+            const badgeHtml = blockedBadgeHtml(event.data.blocked, event.data.blocked_rules);
+            if (badgeHtml) {
+              const meta = msgDiv.querySelector('.meta');
+              if (meta) meta.insertAdjacentHTML('beforeend', badgeHtml);
+              setStatus('⚠️ 该回复命中安全约束，已替换为标准话术', 'warn');
             }
           } else if (event.type === 'error') {
             const contentEl = msgDiv.querySelector('.content');
@@ -538,7 +554,16 @@ function sendPrompt(text) {
   sendMessage();
 }
 
-function appendMsg(role, content, toolCalls, intent) {
+// 被 error 级约束拦下时在气泡上挂的标记（纯函数，方便单独验证）。
+// 不接受 html 注入：规则名走 escapeHtml。
+function blockedBadgeHtml(blocked, rules) {
+  if (!blocked) return '';
+  const names = (rules || []).filter(Boolean).map(escapeHtml);
+  return '<span class="blocked-badge" title="命中 error 级约束，模型原始输出已被替换为安全话术">⚠️ 已拦截' +
+    (names.length ? '：' + names.join(', ') : '') + '</span>';
+}
+
+function appendMsg(role, content, toolCalls, intent, blocked, blockedRules) {
   const container = document.getElementById('chat-container');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
@@ -553,7 +578,8 @@ function appendMsg(role, content, toolCalls, intent) {
   }
   const intentHtml = intent ? '<span class="intent-tag">' + escapeHtml(intent) + '</span>' : '';
   div.innerHTML = escapeHtml(content) + traceHtml +
-    '<div class="meta">' + (role === 'user' ? '你' : 'Agent') + intentHtml + ' · ' +
+    '<div class="meta">' + (role === 'user' ? '你' : 'Agent') + intentHtml +
+    blockedBadgeHtml(blocked, blockedRules) + ' · ' +
     new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + '</div>';
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
