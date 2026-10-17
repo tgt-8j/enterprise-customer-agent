@@ -18,6 +18,7 @@ ToolNode 在异步路径下会自动把它放进线程池执行，同样不阻�
 import json
 import logging
 import time
+from typing import Any
 
 from langchain_core.tools import tool
 
@@ -28,7 +29,7 @@ from src.metrics.metrics import AGENT_TOOL_CALLS_TOTAL
 logger = logging.getLogger(__name__)
 
 
-def _dumps(payload) -> str:
+def _dumps(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 

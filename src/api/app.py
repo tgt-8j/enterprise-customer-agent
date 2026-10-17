@@ -25,9 +25,10 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,7 +52,7 @@ from src.constraints.validator import ConstraintValidator
 from src.dispatch.dispatch import classify_intent
 from src.graph.graph import AGENT_RECURSION_LIMIT, build_agent, get_tools_for_intent
 from src.logging_config import setup_logging
-from src.metrics.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
+from src.metrics.metrics import AGENT_ERRORS_TOTAL, HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
 
 # 初始化结构化日志（必须在导入其他模块后尽早调用）
 setup_logging(level=settings.log_level.upper())
@@ -65,6 +66,10 @@ app = FastAPI(title=settings.app_name, debug=settings.debug)
 # 导致同一句回复走流式时不会截断、不会补工单号、不会软化用语（#8）。
 _constraint_validator = ConstraintValidator()
 _auto_fixer = AutoFixer()
+
+# error 级约束命中、且自动修复修不好时，用这段话替代模型输出。
+# 之前 error 级违规只打一条 warning 日志就原样返回，等于「约束形同虚设」。
+BLOCKED_REPLY = "抱歉，这个问题我无法直接答复，已为您记录并转交人工客服跟进，请稍候。"
 
 # 意图 -> 约束配置 agent 的映射。
 # 上游 classify_intent 产出 query_order / knowledge_search / create_ticket /
@@ -101,7 +106,7 @@ if _DEMO_DIR.is_dir():
 
 
 @lru_cache(maxsize=16)
-def get_agent(intent: str = "general", use_mcp: bool = False):
+def get_agent(intent: str = "general", use_mcp: bool = False) -> Any:
     """Get agent for intent, cached up to 16 entries by (intent, use_mcp)."""
     return build_agent(intent=intent, use_mcp=use_mcp)
 
@@ -125,6 +130,9 @@ class ChatResponse(BaseModel):
     tool_calls: list[ToolCallTrace]
     session_id: str
     intent: str = "general"
+    # 是否命中 error 级约束、回复被替换成安全话术。
+    # 显式返回，便于前端/评测区分「正常回复」与「被拦截」。
+    blocked: bool = False
 
 
 class RegisterRequest(BaseModel):
@@ -151,6 +159,7 @@ class TokenResponse(BaseModel):
 
 # ---------- 中间件 ----------
 
+
 def _route_template(request: Request) -> str:
     """返回当前请求匹配的 FastAPI 路由模板（如 /sessions/{session_id}/history）。
 
@@ -162,7 +171,7 @@ def _route_template(request: Request) -> str:
     raw_path = request.url.path
     for route in app.routes:
         path = getattr(route, "path", None)
-        if not path:
+        if not isinstance(path, str) or not path:
             continue
         if path == raw_path:
             return path
@@ -170,14 +179,16 @@ def _route_template(request: Request) -> str:
         if "{" in path:
             p_segs, a_segs = path.split("/"), raw_path.split("/")
             if len(p_segs) == len(a_segs) and all(
-                p in ("", "") or p.startswith("{") or p == a for p, a in zip(p_segs, a_segs)
+                p == "" or p.startswith("{") or p == a for p, a in zip(p_segs, a_segs)
             ):
                 return path
     return raw_path
 
 
 @app.middleware("http")
-async def logging_middleware(request: Request, call_next):
+async def logging_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """请求日志中间件：记录 request_id、method、path、status、耗时。"""
     req_id = uuid.uuid4().hex[:8]
     start = time.monotonic()
@@ -236,7 +247,7 @@ async def logging_middleware(request: Request, call_next):
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-async def register(req: RegisterRequest):
+async def register(req: RegisterRequest) -> TokenResponse:
     """注册新用户。"""
     existing = await db.get_user_by_email(req.email)
     if existing:
@@ -257,7 +268,7 @@ async def register(req: RegisterRequest):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(req: LoginRequest):
+async def login(req: LoginRequest) -> TokenResponse:
     """用户登录，返回 access_token + refresh_token。"""
     user = await db.get_user_by_email(req.email)
     if not user or not verify_password(req.password, user.password_hash):
@@ -277,7 +288,7 @@ async def login(req: LoginRequest):
 
 
 @app.post("/api/auth/refresh", response_model=TokenResponse)
-async def refresh(req: RefreshRequest):
+async def refresh(req: RefreshRequest) -> TokenResponse:
     """用 refresh token 换取新的 access_token。"""
     from src.auth.auth import decode_token
 
@@ -311,7 +322,7 @@ async def refresh(req: RefreshRequest):
 
 
 @app.post("/api/auth/logout")
-async def logout(request: Request):
+async def logout(request: Request) -> dict[str, str]:
     """注销：使当前 access token 与可提供的 refresh token 同时失效（#16）。
 
     原来只拉黑 access token，refresh token 仍能换新 access 满 7 天，无法吊销。
@@ -338,7 +349,7 @@ async def logout(request: Request):
 # ---------- 业务端点 ----------
 
 
-def history_to_messages(rows) -> list[AnyMessage]:
+def history_to_messages(rows: Sequence[Any]) -> list[AnyMessage]:
     """把 messages 表的行转成 LangChain 消息对象（多轮 messages 数组）。
 
     以结构化多轮消息传给模型，而不是拼成一段"以下是历史对话"的文本：
@@ -354,8 +365,108 @@ def history_to_messages(rows) -> list[AnyMessage]:
     return messages
 
 
+async def ensure_session_access(session_id: str, user_id: int) -> None:
+    """会话归属校验（防 IDOR）：只能往自己的会话里读写。
+
+    /sessions/{id}/history 和 DELETE 早就有这项校验，但 /chat、/chat_stream
+    没有 —— 拿到别人的 session_id 就能让 Agent 读出对方的历史内容再复述出来。
+    owner 为 None（旧数据/未鉴权链路）时放行，保持向后兼容。
+    """
+    owner = await db.get_session_owner(session_id)
+    if owner is not None and str(owner) != str(user_id):
+        raise HTTPException(status_code=403, detail="无权访问该会话")
+
+
+def _tool_payload(output: str) -> dict[str, Any] | None:
+    """把工具返回的 JSON 字符串解析成 dict；解析不了（如纯文本错误）返回 None。"""
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def build_validation_context(tool_results: list[tuple[str, str]]) -> dict[str, Any]:
+    """从工具的真实返回推导约束校验上下文。
+
+    这是「上下文感知验证」的关键：以前 order_verified 硬编码成 True，
+    导致 fabricate_order_info / promise_refund_without_verification
+    两条 error 规则永远不可能触发，校验器等于只校验了字面。
+
+    规则：
+    - 只有 query_order 成功返回订单（JSON 里没有 error 字段）才算 order_verified；
+    - 只有 create_ticket 成功返回 ticket_id 才算 ticket_created（建单失败不能再要求回复带工单号）。
+
+    注意：必须传工具的**完整**返回，不能用 ToolCallTrace 里截断 200 字的摘要，
+    否则 create_ticket 的 JSON 会被截断、ticket_id 解析失败。
+    """
+    order_verified = False
+    ticket_id: str | None = None
+    for tool_name, output in tool_results:
+        payload = _tool_payload(output)
+        if payload is None or payload.get("error"):
+            continue
+        if tool_name == "query_order":
+            order_verified = True
+        elif tool_name == "create_ticket" and payload.get("ticket_id") is not None:
+            ticket_id = str(payload["ticket_id"])
+    return {
+        "ticket_created": ticket_id is not None,
+        "ticket_id": ticket_id,
+        "order_verified": order_verified,
+    }
+
+
+def apply_constraints(
+    intent: str,
+    reply: str,
+    context: dict[str, Any],
+    log_extra: dict[str, Any] | None = None,
+) -> tuple[str, bool]:
+    """校验 → 自动修复 → 重新校验 → 仍阻断则替换成安全话术。
+
+    返回 (最终回复, 是否被阻断)。/chat 与 /chat_stream 共用这一份，
+    保证两个接口的约束行为完全一致。
+    """
+    agent_id = _INTENT_TO_CONSTRAINT_AGENT.get(intent, intent)
+    result = _constraint_validator.validate_output(agent_id, reply, context=context)
+
+    if result.auto_fixable:
+        fixed = _auto_fixer.fix_output(reply, result.auto_fixable, context=context)
+        if fixed != reply:
+            logger.info(
+                "约束验证已自动修复输出",
+                extra={
+                    **(log_extra or {}),
+                    "fixes": result.auto_fixable,
+                    "violations_count": len(result.violations),
+                },
+            )
+            reply = fixed
+            # 修完要重新校验：否则会拿修复前的结论去判断是否阻断，
+            # 把「只是少个工单号、已经补上了」的回复也拦掉。
+            result = _constraint_validator.validate_output(agent_id, reply, context=context)
+
+    if result.is_blockable:
+        AGENT_ERRORS_TOTAL.labels(error_type="constraint_blocked").inc()
+        logger.warning(
+            "约束验证发现阻断性违规，回复已替换为安全话术",
+            extra={
+                **(log_extra or {}),
+                "violations": [
+                    {"rule": v.rule, "detail": v.detail}
+                    for v in result.violations
+                    if v.severity == "error"
+                ],
+            },
+        )
+        return BLOCKED_REPLY, True
+
+    return reply, False
+
+
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_user)):
+async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_user)) -> ChatResponse:
     """发送消息，Agent 回复。需要 Bearer token 认证。支持意图分发。"""
     # 意图分发：根据用户输入选择处理策略
     intent_decision = await classify_intent(req.message)
@@ -365,6 +476,9 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
     # 否则用本地 @tool。lru_cache 按 (intent, use_mcp) 分桶，互不污染。
     agent = get_agent(intent=intent, use_mcp=settings.use_mcp)
     session_id = req.session_id or str(uuid.uuid4())
+
+    # 会话归属校验（防 IDOR）：只能继承自己的历史
+    await ensure_session_access(session_id, current_user.id)
 
     # 恢复上下文：滑动窗口内的历史 + 本轮用户消息，一起进图。
     history_rows = await db.load_history(session_id)
@@ -409,6 +523,8 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
 
     # 把这一轮里所有的 tool_calls 和对应的 ToolMessage 结果配对，组装成轨迹
     trace: list[ToolCallTrace] = []
+    # 工具完整返回（不截断），仅供约束校验推导上下文，不进响应体
+    tool_results: list[tuple[str, str]] = []
     pending_calls: dict[str, dict[str, object]] = {}
     for m in messages:
         if isinstance(m, AIMessage) and m.tool_calls:
@@ -417,74 +533,30 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
                 pending_calls[call_id] = {"name": call["name"], "args": call["args"]}
         if isinstance(m, ToolMessage):
             call_info = pending_calls.get(str(m.tool_call_id), {"name": "unknown", "args": {}})
+            tool_name = str(call_info["name"])
+            full_output = str(m.content) if m.content else ""
+            tool_results.append((tool_name, full_output))
             trace.append(
                 ToolCallTrace(
-                    tool_name=str(call_info["name"]),
+                    tool_name=tool_name,
                     tool_input=call_info["args"] if isinstance(call_info["args"], dict) else {},
-                    # 与非流式接口一致：trace 只放摘要（截断 200 字），不存全量
-                    # payload，避免超长工具输出撑爆 /chat 响应体（#Medium 两接口一致）。
-                    tool_output=str(m.content)[:200] if m.content else "",
+                    # 响应体里的 trace 只放摘要（截断 200 字），避免超长工具输出撑爆 /chat；
+                    # 约束校验用上面的 full_output，不拿摘要凑合。
+                    tool_output=full_output[:200],
                 )
             )
 
     final_reply = messages[-1].content if messages else ""
 
-    # 约束验证：检查输出是否符合业务安全约束，必要时自动修复
-    # 判断本轮是否创建了工单（用于上下文感知验证）
-    ticket_created = any(tc.tool_name == "create_ticket" for tc in trace)
-    ticket_id = None
-    if ticket_created:
-        for tc in trace:
-            if tc.tool_name == "create_ticket":
-                try:
-                    import json as _json
-
-                    parsed = _json.loads(tc.tool_output)
-                    # create_ticket 返回 {"ticket_id": <int 自增>, ...}，
-                    # 工单号是纯数字。校验器 _TICKET_ID_RE 已兼容纯数字与 TC 前缀，
-                    # 这里把 int 转成 str 供 AutoFixer 补全。
-                    if isinstance(parsed, dict) and parsed.get("ticket_id") is not None:
-                        ticket_id = str(parsed["ticket_id"])
-                        break
-                except Exception:
-                    pass
-    validation_ctx = {
-        "ticket_created": ticket_created,
-        "ticket_id": ticket_id,
-        "order_verified": True,  # 工单创建前已验证订单存在
-    }
-    # intent（query_order / knowledge_search / create_ticket / chitchat）映射到
-    # 约束配置里的 agent（customer_service / chitchat）。若不映射，constraints.yaml
-    # 只定义了 customer_service 与 chitchat，_get_agent_config 会命中不到 → 业务
-    # 约束一条都不加载（README 主推特性变死代码）。
-    constraint_agent_id = _INTENT_TO_CONSTRAINT_AGENT.get(intent, intent)
-    vresult = _constraint_validator.validate_output(
-        constraint_agent_id, final_reply, context=validation_ctx
+    # 约束验证：从工具真实返回推导上下文（订单是否真的查到了、工单是否真的建了），
+    # 再校验输出、自动修复、必要时阻断。
+    validation_ctx = build_validation_context(tool_results)
+    final_reply, blocked = apply_constraints(
+        intent,
+        str(final_reply),
+        validation_ctx,
+        log_extra={"session_id": session_id, "user_id": current_user.id},
     )
-    if vresult.auto_fixable:
-        fixed_reply = _auto_fixer.fix_output(
-            final_reply, vresult.auto_fixable, context=validation_ctx
-        )
-        if fixed_reply != final_reply:
-            logger.info(
-                "约束验证已自动修复输出",
-                extra={
-                    "fixes": vresult.auto_fixable,
-                    "violations_count": len(vresult.violations),
-                },
-            )
-            final_reply = fixed_reply
-    if vresult.is_blockable:
-        logger.warning(
-            "约束验证发现阻断性违规，记录到监控",
-            extra={
-                "violations": [
-                    {"rule": v.rule, "detail": v.detail}
-                    for v in vresult.violations
-                    if v.severity == "error"
-                ],
-            },
-        )
 
     # 本轮对话入库：只存 user 消息 + assistant 最终回复（中间工具过程不入库）
     # 记录会话归属：该 session 首次写入时把 owner 设为当前用户，后续沿用。
@@ -499,14 +571,23 @@ async def chat(req: ChatRequest, current_user: db.User = Depends(get_current_use
             "intent": intent,
             "tool_call_count": len(trace),
             "reply_length": len(final_reply),
+            "blocked": blocked,
         },
     )
 
-    return ChatResponse(reply=final_reply, tool_calls=trace, session_id=session_id, intent=intent)
+    return ChatResponse(
+        reply=final_reply,
+        tool_calls=trace,
+        session_id=session_id,
+        intent=intent,
+        blocked=blocked,
+    )
 
 
 @app.post("/chat_stream")
-async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_current_user)):
+async def chat_stream(
+    req: ChatRequest, current_user: db.User = Depends(get_current_user)
+) -> EventSourceResponse:
     """流式对话接口（SSE）。支持意图分发和实时 token 输出。"""
     # 意图分发
     intent_decision = await classify_intent(req.message)
@@ -514,6 +595,10 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
 
     agent = get_agent(intent=intent, use_mcp=settings.use_mcp)
     session_id = req.session_id or str(uuid.uuid4())
+
+    # 会话归属校验（防 IDOR）：必须放在返回 EventSourceResponse 之前，
+    # 这样越权请求拿到的是真正的 HTTP 403，而不是一个"开始流式输出后才发现"的错误。
+    await ensure_session_access(session_id, current_user.id)
 
     # 恢复上下文
     history_rows = await db.load_history(session_id)
@@ -523,6 +608,8 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
     async def event_generator() -> AsyncGenerator[dict, None]:
         final_reply = ""
         trace: list[ToolCallTrace] = []
+        # 工具完整返回，供约束校验推导上下文（trace 里只有 200 字摘要）
+        tool_results: list[tuple[str, str]] = []
         pending_calls = {}
         # #14：区分"中间 ReAct 轮"和"最终轮"。
         # on_chat_model_stream 对*每个*模型调用都会吐 token，多轮 ReAct 下
@@ -532,7 +619,6 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
         # 那轮（无 tool_calls）的文本作为 final_reply。
         _run_text: dict[str, str] = {}
         _run_id: str = ""
-        _run_has_tools = False
 
         try:
             async for event in agent.astream_events(
@@ -549,7 +635,6 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
                     if new_run_id and new_run_id != _run_id:
                         _run_id = new_run_id
                         _run_text[_run_id] = ""
-                        _run_has_tools = False
                     _run_text[_run_id] = _run_text.get(_run_id, "")
                     chunk = event["data"]["chunk"]
                     if hasattr(chunk, "content") and chunk.content:
@@ -596,14 +681,18 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
                 elif kind == "on_tool_end":
                     name = event["name"]
                     output = event["data"].get("output", "")
-                    # 工具白名单校验：工具不在该意图约束集的白名单里则记录阻断。
-                    # （#5）此前 validate_tool_call 只在测试里出现，主链路零调用点。
+                    full_output = str(output)
+                    tool_results.append((name, full_output))
+                    # 工具白名单校验：工具不在该意图约束集的白名单里则记录。
+                    # 注意这是事后校验 —— 工具已经执行完了，拦住调用需要图层的
+                    # pre-tool hook，当前只做审计告警，不要声称"直接拒绝调用"。
                     _tcall = _constraint_validator.validate_tool_call(
                         _INTENT_TO_CONSTRAINT_AGENT.get(intent, intent), name
                     )
                     if not _tcall.valid:
+                        AGENT_ERRORS_TOTAL.labels(error_type="tool_whitelist_violation").inc()
                         logger.warning(
-                            "工具白名单校验失败（流式）",
+                            "工具白名单校验失败（流式，事后审计）",
                             extra={
                                 "tool": name,
                                 "intent": intent,
@@ -617,7 +706,7 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
                             ToolCallTrace(
                                 tool_name=name,
                                 tool_input=pending_calls[name]["args"],
-                                tool_output=str(output)[:200],
+                                tool_output=full_output[:200],
                             )
                         )
                         del pending_calls[name]
@@ -632,52 +721,15 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
                         ),
                     }
 
-            # 流式接口也要走和 /chat 一致的约束校验（#8）：
-            # 此前 /chat 有 Validator + AutoFixer，而 /chat_stream 完全没有，
-            # 同一句话走流式就不会补工单号 / 截断 / 软化绝对化用语。
-            _ticket_created = any(tc.tool_name == "create_ticket" for tc in trace)
-            _ticket_id = None
-            if _ticket_created:
-                for tc in trace:
-                    if tc.tool_name == "create_ticket":
-                        try:
-                            parsed = json.loads(tc.tool_output)
-                            if isinstance(parsed, dict) and parsed.get("ticket_id") is not None:
-                                _ticket_id = str(parsed["ticket_id"])
-                                break
-                        except Exception:
-                            pass
-            _vctx = {
-                "ticket_created": _ticket_created,
-                "ticket_id": _ticket_id,
-                "order_verified": True,
-            }
-            _constraint_agent = _INTENT_TO_CONSTRAINT_AGENT.get(intent, intent)
-            _vresult = _constraint_validator.validate_output(
-                _constraint_agent, final_reply, context=_vctx
+            # 与 /chat 完全共用同一份约束逻辑：推导上下文 → 校验 → 自动修复 →
+            # 重新校验 → 必要时替换为安全话术。
+            _vctx = build_validation_context(tool_results)
+            final_reply, blocked = apply_constraints(
+                intent,
+                final_reply,
+                _vctx,
+                log_extra={"session_id": session_id, "user_id": current_user.id, "stream": True},
             )
-            if _vresult.auto_fixable:
-                _fixed = _auto_fixer.fix_output(final_reply, _vresult.auto_fixable, context=_vctx)
-                if _fixed != final_reply:
-                    logger.info(
-                        "约束验证已自动修复输出（流式）",
-                        extra={
-                            "fixes": _vresult.auto_fixable,
-                            "violations_count": len(_vresult.violations),
-                        },
-                    )
-                    final_reply = _fixed
-            if _vresult.is_blockable:
-                logger.warning(
-                    "约束验证发现阻断性违规（流式），记录到监控",
-                    extra={
-                        "violations": [
-                            {"rule": v.rule, "detail": v.detail}
-                            for v in _vresult.violations
-                            if v.severity == "error"
-                        ],
-                    },
-                )
 
             # 保存对话
             await db.save_message(session_id, "user", req.message, user_id=str(current_user.id))
@@ -685,7 +737,10 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
                 session_id, "assistant", final_reply, user_id=str(current_user.id)
             )
 
-            # 完成事件
+            # 完成事件。
+            # 关键：必须把最终 reply 一起发回去。token 是边生成边推的，
+            # 自动修复/阻断发生在流结束之后，只更新 DB 不告诉前端的话，
+            # 用户看到的仍是被修复前的文本（"流式也走约束"等于没生效）。
             yield {
                 "event": "message",
                 "data": json.dumps(
@@ -695,6 +750,8 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
                             "session_id": session_id,
                             "tool_calls": trace,
                             "intent": intent,
+                            "reply": final_reply,
+                            "blocked": blocked,
                         },
                     },
                     ensure_ascii=False,
@@ -721,6 +778,10 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
                             "session_id": session_id,
                             "tool_calls": trace,
                             "intent": intent,
+                            # 出错时把已生成的部分文本回传，前端不会停在"光标常驻"状态
+                            "reply": final_reply,
+                            "blocked": False,
+                            "error": True,
                         },
                     },
                     ensure_ascii=False,
@@ -735,7 +796,9 @@ async def chat_stream(req: ChatRequest, current_user: db.User = Depends(get_curr
 
 
 @app.get("/dispatch")
-async def debug_dispatch(query: str, current_user: db.User = Depends(get_current_user)):
+async def debug_dispatch(
+    query: str, current_user: db.User = Depends(get_current_user)
+) -> dict[str, Any]:
     """意图分发调试端点。"""
     decision = await classify_intent(query)
     return {
@@ -754,7 +817,7 @@ async def get_history(
     current_user: db.User = Depends(get_current_user),
     page: int = Query(1, ge=1, description="页码，从 1 起"),
     size: int = Query(50, ge=1, le=500, description="每页条数"),
-):
+) -> dict[str, Any]:
     # 会话归属校验（防 IDOR）：只能读/删属于自己的会话。
     # owner 已知且与当前用户不一致 → 403；owner 未知（旧数据/未鉴权链路）→ 放行。
     owner = await db.get_session_owner(session_id)
@@ -782,7 +845,7 @@ async def get_history(
 async def delete_session(
     session_id: str,
     current_user: db.User = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     owner = await db.get_session_owner(session_id)
     if owner is not None and str(owner) != str(current_user.id):
         raise HTTPException(status_code=403, detail="无权删除该会话")
@@ -794,7 +857,7 @@ async def delete_session(
 
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, Any]:
     """增强型健康检查：验证 PostgreSQL 和 ChromaDB 连通性。
 
     返回 status: "healthy" 当所有依赖正常，"degraded" 当部分依赖异常。
@@ -804,7 +867,7 @@ async def health():
 
     from sqlalchemy import text
 
-    async def check_db():
+    async def check_db() -> str:
         try:
             await db.ensure_tables()
             async with db.engine.connect() as conn:
@@ -813,7 +876,7 @@ async def health():
         except Exception as e:
             return f"error: {e}"
 
-    def check_chroma():
+    def check_chroma() -> str:
         try:
             from src.retrieval.rag import get_collection
 
@@ -834,7 +897,7 @@ async def health():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics() -> Response:
     """Prometheus 指标端点。由 Prometheus scraper 调用，不需要认证。"""
     from prometheus_client import generate_latest
 

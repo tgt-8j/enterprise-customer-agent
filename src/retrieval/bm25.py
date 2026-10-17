@@ -11,8 +11,14 @@ import threading
 from collections import Counter
 
 # BM25 参数（罗伯逊-斯维科夫公式经验值）
-K1 = 1.5   # 词频饱和参数，越大越容忍高频词
-B = 0.75   # 文档长度归一化参数，越大越偏向长文档
+K1 = 1.5  # 词频饱和参数，越大越容忍高频词
+B = 0.75  # 文档长度归一化参数，越大越偏向长文档
+
+# 中文不分词：单字 + 相邻二元组。
+# 之前用 r"[\u4e00-\u9fa5]+" 把一整句中文当成一个 token，
+# 导致 query "退货" 与文档里的 "……支持七天无理由退货……" 永远匹配不上，
+# BM25 实际召回恒为 0（Hybrid 检索名存实亡）。
+_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fa5]+|[a-zA-Z0-9]+")
 
 
 class BM25Index:
@@ -27,24 +33,38 @@ class BM25Index:
 
     def __init__(self, corpus: list[str], language: str = "zh"):
         self.corpus = corpus
+        self.language = language
         self.tokenized = [self._tokenize(doc, language) for doc in corpus]
         self.doc_lengths = [len(tokens) for tokens in self.tokenized]
         self.avgdl = sum(self.doc_lengths) / max(len(self.doc_lengths), 1)
         self._build_indexes()
 
     def _tokenize(self, text: str, language: str) -> list[str]:
-        """简单分词：中文按字符分割（生产环境可换 jieba），英文按空格分割。"""
-        if language == "zh":
-            # 中文：提取所有汉字、数字、字母作为 token
-            return re.findall(r"[\u4e00-\u9fa5a-zA-Z0-9]+", text.lower())
-        return text.lower().split()
+        """简单分词：中文按「单字 + 相邻二元组」，英文/数字按整段。
 
-    def _build_indexes(self):
+        单字保证召回（"退货" 里的 "退" 也能命中），二元组保证精度
+        （"退货" 作为一个词打分更高）。不引入 jieba，避免多一个重依赖：
+        客服知识库是几百字一篇的短文档，词表规模小，这个折中够用。
+        若要换成真分词，替换本函数即可，索引结构不用动。
+        """
+        if language != "zh":
+            return text.lower().split()
+
+        tokens: list[str] = []
+        for run in _CJK_RUN_RE.findall(text.lower()):
+            if run[0].isascii():
+                tokens.append(run)
+                continue
+            tokens.extend(run)
+            tokens.extend(run[i : i + 2] for i in range(len(run) - 1))
+        return tokens
+
+    def _build_indexes(self) -> None:
         """构建词频和文档频率索引。"""
-        self.term_freqs: list[Counter] = []
+        self.term_freqs: list[Counter[str]] = []
         self.df: dict[str, int] = {}
         for tokens in self.tokenized:
-            counter = Counter(tokens)
+            counter: Counter[str] = Counter(tokens)
             self.term_freqs.append(counter)
             for term in counter:
                 self.df[term] = self.df.get(term, 0) + 1
@@ -59,20 +79,16 @@ class BM25Index:
             df = self.df.get(token, 0)
             if df == 0:
                 continue
-            idf = math.log(
-                (self.N - df + 0.5) / (df + 0.5) + 1.0
-            )  # BM25 IDF 公式
+            idf = math.log((self.N - df + 0.5) / (df + 0.5) + 1.0)  # BM25 IDF 公式
             term_tf = tf.get(token, 0)
             numerator = term_tf * (K1 + 1)
-            denominator = term_tf + K1 * (
-                1 - B + B * doc_len / self.avgdl
-            )
+            denominator = term_tf + K1 * (1 - B + B * doc_len / self.avgdl)
             score += idf * numerator / denominator
         return score
 
     def search(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
         """对 query 检索 Top-K 文档，返回 (doc_index, score) 列表。"""
-        tokens = self._tokenize(query, "zh")
+        tokens = self._tokenize(query, self.language)
         scores = []
         for i in range(len(self.corpus)):
             s = self.score(tokens, i)
@@ -85,29 +101,36 @@ class BM25Index:
 class BM25Retriever:
     """BM25 检索器，封装索引生命周期。"""
 
-    def __init__(self, language: str = "zh"):
+    def __init__(self, language: str = "zh") -> None:
         self.language = language
         self.index: BM25Index | None = None
+        # document_text -> source（用文件名做来源标注，供 RRF 融合后回溯）
+        self.sources: dict[str, str] = {}
         self._lock = threading.Lock()
         self._built = False
 
-    def build(self, documents: list[str]) -> None:
-        """用文档列表构建 BM25 索引。幂等：已构建则跳过。"""
+    def build(self, documents: list[str], sources: list[str] | None = None) -> None:
+        """用文档列表构建 BM25 索引。幂等：已构建则跳过。
+
+        sources 与 documents 一一对应；缺省时来源记作 "未知来源"。
+        """
         with self._lock:
             if self._built and self.index is not None:
                 return
             self.index = BM25Index(documents, self.language)
+            if sources is None:
+                sources = ["未知来源"] * len(documents)
+            self.sources = dict(zip(documents, sources))
             self._built = True
 
-    def search(
-        self, query: str, top_k: int = 10
-    ) -> list[tuple[str, float]]:
-        """检索并返回 [(document_text, score), ...]。未建索引时返回空列表。"""
+    def search(self, query: str, top_k: int = 10) -> list[tuple[str, str, float]]:
+        """检索并返回 [(document_text, source, score), ...]。未建索引时返回空列表。"""
         if self.index is None:
             return []
         results = self.index.search(query, top_k)
         return [
-            (self.corpus[idx], score) for idx, score in results
+            (self.corpus[idx], self.sources.get(self.corpus[idx], "未知来源"), score)
+            for idx, score in results
         ]
 
     @property

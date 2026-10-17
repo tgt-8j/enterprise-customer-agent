@@ -18,7 +18,7 @@ create_react_agent 一行代码就能给你一个能用的 Agent，但面试官�
 """
 
 import logging
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -89,7 +89,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
 
-def build_agent(llm=None, use_mcp=False, intent="general"):
+def build_agent(llm: Any = None, use_mcp: bool = False, intent: str = "general") -> Any:
     """
     构建并编译 LangGraph。
 
@@ -108,7 +108,7 @@ def build_agent(llm=None, use_mcp=False, intent="general"):
     # 根据意图选择 system prompt
     system_prompt = _get_system_prompt(intent)
 
-    def call_model(state: AgentState):
+    def call_model(state: AgentState) -> dict[str, Any]:
         messages = state["messages"]
         # 每轮都把 system prompt 插在最前：历史消息里只有 user/assistant，
         # SystemMessage 从不会写回 state（add_messages reducer 追加的是节点返回值
@@ -133,7 +133,7 @@ def build_agent(llm=None, use_mcp=False, intent="general"):
     return compiled
 
 
-def _get_tools_for_intent(intent: str, use_mcp: bool = False):
+def _get_tools_for_intent(intent: str, use_mcp: bool = False) -> list[Any]:
     """根据意图选择工具集合。"""
     if use_mcp:
         # MCP 模式：返回所有工具，由意图分发决定在对话中实际使用哪些
@@ -157,7 +157,7 @@ def _get_system_prompt(intent: str) -> str:
     return SYSTEM_PROMPT
 
 
-async def get_tools_for_intent(intent: str, use_mcp: bool = False):
+async def get_tools_for_intent(intent: str, use_mcp: bool = False) -> list[Any]:
     """获取指定意图的工具列表。供 main.py 的 dispatch 路由使用。
 
     use_mcp=True 时通过 langchain-mcp-adapters 从远程 MCP Server 加载工具，
@@ -168,7 +168,7 @@ async def get_tools_for_intent(intent: str, use_mcp: bool = False):
     return _get_tools_for_intent(intent)
 
 
-async def get_mcp_tools():
+async def get_mcp_tools() -> list[Any]:
     """通过 MCP 协议加载远程工具，MCP Server 挂掉时自动回退到本地工具。
 
     MCP Server 地址由 MCP_SERVER_URL 环境变量控制，默认 http://mcp_server:8001/mcp。
@@ -189,7 +189,7 @@ async def get_mcp_tools():
         )
         tools = await client.get_tools()
         logger.info(f"MCP 加载成功，获得 {len(tools)} 个工具")
-        return tools
+        return list(tools)
     except Exception as e:
         logger.warning(f"MCP 加载失败，回退到本地工具: {e}")
         return ALL_TOOLS

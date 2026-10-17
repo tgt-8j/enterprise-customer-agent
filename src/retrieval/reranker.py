@@ -33,12 +33,15 @@ POSITION_DECAY = 0.15
 
 @dataclass
 class RerankResult:
-    """Rerank 后的单条结果。"""
+    """Rerank 后的单条结果。
+
+    similarity 为 None 表示该文档只被 BM25 召回、没有向量分数。
+    """
 
     document: str
     source: str
     original_rank: int
-    similarity: float
+    similarity: float | None
     final_score: float
     disputed: bool = False
 
@@ -60,15 +63,16 @@ def _source_weight(source: str) -> float:
 
 def two_stage_rerank(
     candidates: list[dict[str, Any]],
-    embedding_similarities: list[float] | None = None,
+    embedding_similarities: list[float | None] | None = None,
     top_k_final: int = 5,
 ) -> list[RerankResult]:
     """两级 Rerank：粗筛 + 精排。
 
     Args:
-        candidates: 召回的文档列表，每项含 'document', 'source', 'chunk_index'
-        embedding_similarities: 对应的 Embedding 余弦相似度（来自粗筛阶段），
-                                若为 None 则仅使用来源权重退化排序
+        candidates: 召回的文档列表，每项含 'document', 'source'
+        embedding_similarities: 对应的向量相似度；None 表示该候选没有向量分
+                                （只被 BM25 召回），不会被粗筛丢弃。
+                                整个参数为 None 时退化为纯来源权重排序
         top_k_final: 最终返回条数
 
     Returns:
@@ -79,8 +83,14 @@ def two_stage_rerank(
 
     # --- 第一级：粗筛（基于 embedding 相似度）---
     if embedding_similarities is not None and len(embedding_similarities) == len(candidates):
-        # 保留相似度 > 0.3 的候选（比主搜索的 0.25 阈值更严格，减少噪音）
-        filtered = [(i, c) for i, c in enumerate(candidates) if embedding_similarities[i] > 0.3]
+        # 只丢「有向量分但分数偏低」的候选；没有向量分的（BM25 独有）必须保留。
+        # 此前统一用 `similarity > 0.3` 过滤，把 BM25 独有候选（相似度记 0.0）
+        # 全部丢掉，导致 embedding 故障时「纯 BM25 兜底」实际返回空结果。
+        filtered = []
+        for idx, candidate in enumerate(candidates):
+            sim = embedding_similarities[idx]
+            if sim is None or sim > 0.3:
+                filtered.append((idx, candidate))
     else:
         # 退化：无 embedding 数据，全部参与精排
         filtered = list(enumerate(candidates))
@@ -91,13 +101,14 @@ def two_stage_rerank(
     # --- 第二级：精排（来源权重 + 位置衰减）---
     results = []
     for rank, (orig_idx, candidate) in enumerate(filtered):
-        sim = embedding_similarities[orig_idx] if embedding_similarities is not None else 0.0
+        sim = embedding_similarities[orig_idx] if embedding_similarities is not None else None
         source = candidate.get("source", "未知来源")
         doc = candidate.get("document", "")
         weight = _source_weight(source)
         # 位置衰减：越靠后的结果扣分越多
         position_penalty = rank * POSITION_DECAY
-        final_score = sim * 0.5 + weight * 0.5 - position_penalty
+        # 没有向量分时 sim 按 0 计入，靠来源权重与位置衰减排序
+        final_score = (sim or 0.0) * 0.5 + weight * 0.5 - position_penalty
         results.append(
             RerankResult(
                 document=doc,

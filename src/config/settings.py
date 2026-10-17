@@ -14,7 +14,7 @@
 
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -182,7 +182,7 @@ def get_settings() -> BaseConfig:
     """返回单例配置对象。lru_cache 保证进程内只解析一次，性能无忧。"""
     env = os.getenv("PYTHON_ENV", "dev").lower()
     cfg_cls = _ENV_MAP.get(env, DevConfig)
-    return cfg_cls()
+    return cast(BaseConfig, cfg_cls())
 
 
 # 模块级别直接暴露一份，方便其他模块 import settings 就能用。

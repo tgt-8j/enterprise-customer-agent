@@ -278,8 +278,10 @@ async function setStatus(msg, type) {
   err.style.display = 'none';
   if (!msg) { bar.style.display = 'none'; return; }
   bar.textContent = msg;
-  bar.style.background = type === 'error' ? '#fef2f2' : '#f0fdf4';
-  bar.style.color = type === 'error' ? '#ef4444' : '#16a34a';
+  const isErr = type === 'error';
+  const isWarn = type === 'warn';
+  bar.style.background = isErr ? '#fef2f2' : isWarn ? '#fffbeb' : '#f0fdf4';
+  bar.style.color = isErr ? '#ef4444' : isWarn ? '#d97706' : '#16a34a';
   bar.style.display = 'block';
 }
 
@@ -366,6 +368,7 @@ async function sendMessageBlock(text) {
   const data = await res.json();
   sessionId = data.session_id;
   appendMsg('agent', data.reply, data.tool_calls || [], data.intent);
+  if (data.blocked) setStatus('⚠️ 该回复命中安全约束，已替换为标准话术', 'warn');
 }
 
 async function sendMessageStream(text) {
@@ -431,10 +434,19 @@ async function sendMessageStream(text) {
             sessionId = event.data.session_id;
             toolCalls = event.data.tool_calls || [];
             const intent = event.data.intent;
-            // 移除光标
+            // 以服务端的最终文本为准：约束自动修复 / error 级拦截都发生在
+            // 最后一个 token 之后，只用本地 buffer 会显示"被修复前"的内容。
+            const finalReply = typeof event.data.reply === 'string' && event.data.reply
+              ? event.data.reply
+              : buffer;
             const content = msgDiv.querySelector('.content');
-            if (content) content.textContent = buffer;
-            content?.classList.remove('cursor');
+            if (content) {
+              content.textContent = finalReply;
+              content.classList.remove('cursor');
+            }
+            if (event.data.blocked) {
+              setStatus('⚠️ 该回复命中安全约束，已替换为标准话术', 'warn');
+            }
             // 添加工具调用轨迹
             if (toolCalls.length > 0) {
               const traceDiv = msgDiv.querySelector('.trace') || createTraceDiv(msgDiv);

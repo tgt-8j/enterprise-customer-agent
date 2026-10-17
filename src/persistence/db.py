@@ -13,6 +13,7 @@ PostgreSQL 持久化层（SQLAlchemy 2.0 异步 + asyncpg 驱动）。
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -106,7 +107,7 @@ AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_co
 
 
 @asynccontextmanager
-async def session_scope():
+async def session_scope() -> AsyncIterator[AsyncSession]:
     """一个请求级的事务边界：正常提交、异常回滚。工具函数用它包住读写。"""
     async with AsyncSessionLocal() as session:
         try:
@@ -147,7 +148,7 @@ def reset_tables_ready() -> None:
     _tables_ready = False
 
 
-async def ensure_tables():
+async def ensure_tables() -> None:
     """幂等建表（create_all 自带 checkfirst），进程内只真正执行一次。
 
     跨循环安全：锁绑定在当前事件循环，模块加载不会错绑到不存在的循环；
@@ -211,7 +212,9 @@ async def count_history(session_id: str) -> int:
     """某会话的消息总数（用于分页 total 字段）。"""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(func.count()).select_from(ChatMessage).where(ChatMessage.session_id == session_id)
+            select(func.count())
+            .select_from(ChatMessage)
+            .where(ChatMessage.session_id == session_id)
         )
         return int(result.scalar_one() or 0)
 
@@ -239,7 +242,9 @@ async def load_history_paged(
         return list(result.scalars().all()), total
 
 
-async def save_message(session_id: str, role: str, content: str, user_id: str | None = None) -> None:
+async def save_message(
+    session_id: str, role: str, content: str, user_id: str | None = None
+) -> None:
     """写一条对话消息（role: user / assistant）。
 
     user_id 用于会话归属：首次写该会话时记录 owner，后续同会话沿用。
@@ -275,7 +280,8 @@ async def clear_session(session_id: str) -> int:
         result = await session.execute(
             delete(ChatMessage).where(ChatMessage.session_id == session_id)
         )
-        return result.rowcount
+        # execute() 的静态类型是 Result，DELETE 实际返回 CursorResult（有 rowcount）
+        return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def get_session_owner(session_id: str) -> str | None:

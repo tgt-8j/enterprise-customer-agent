@@ -236,3 +236,36 @@ def client_with_fake_llm(client_with_token):
     fake_llm = DummyFakeLLM()
     with patch.object(agent, "get_llm", return_value=fake_llm):
         yield client_with_token
+
+
+# ──────────────────────────────────────────────
+# 检索模块的进程级状态隔离
+# ──────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _reset_retrieval_state():
+    """每个测试前后清空 BM25 索引。
+
+    `rag._bm25_retriever` 是模块级单例（懒加载 / 建库时赋值）。测试里
+    build_knowledge_base 会把它建成测试语料，若不清空会串到后面的 search 用例，
+    让断言依赖测试执行顺序。
+    """
+    import src.retrieval.rag as rag_module
+
+    rag_module._bm25_retriever = None
+    yield
+    rag_module._bm25_retriever = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_sse_app_status():
+    """重置 sse-starlette 的全局 Event。
+
+    AppStatus.should_exit_event 是模块级 asyncio.Event，会绑定到第一次创建它的
+    事件循环；TestClient 每个用例一个循环，第 2 个之后的 SSE 用例就会报
+    "is bound to a different event loop"。这里每个用例前重建一次。
+    """
+    from sse_starlette.sse import AppStatus
+
+    AppStatus.should_exit_event = None
+    yield
+    AppStatus.should_exit_event = None

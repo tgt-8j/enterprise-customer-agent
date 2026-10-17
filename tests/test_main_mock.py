@@ -107,6 +107,8 @@ def _patch_db_and_intent():
     mock_db.load_history = AsyncMock(return_value=[])
     mock_db.save_message = AsyncMock(return_value=None)
     mock_db.clear_session = AsyncMock(return_value=1)
+    # /chat 与 /chat_stream 现在都会做会话归属校验：默认"旧数据，无 owner"→ 放行
+    mock_db.get_session_owner = AsyncMock(return_value=None)
     mock_db.AsyncSessionLocal = AsyncMock()
     return mock_db
 
@@ -256,10 +258,12 @@ class TestSessionsEndpoints:
             MagicMock(role="assistant", content="hello", created_at="2026-01-01"),
         ]
         mock_db.get_session_owner = AsyncMock(return_value=None)
-        mock_db.load_history_paged = AsyncMock(return_value=(
-            [MagicMock(role="user", content="hi", created_at="2026-01-01")],
-            1,
-        ))
+        mock_db.load_history_paged = AsyncMock(
+            return_value=(
+                [MagicMock(role="user", content="hi", created_at="2026-01-01")],
+                1,
+            )
+        )
         with patch("src.api.app.db", mock_db):
             response = client.get("/sessions/s1/history?page=1&size=50", headers=_auth_headers())
             assert response.status_code == 200
@@ -338,6 +342,61 @@ class TestSessionOwnership:
             # 两次 save_message（user + assistant）都应带 user_id="1"
             for c in mock_db.save_message.call_args_list:
                 assert c.kwargs.get("user_id") == "1" or c.args[-1] == "1"
+
+    # ---- /chat 与 /chat_stream 也必须校验会话归属（此前只有 history/delete 有） ----
+    def test_chat_403_when_session_belongs_to_other_user(self, client, fake_agent):
+        mock_db = _patch_db_and_intent()
+        mock_db.get_session_owner = AsyncMock(return_value="999")
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="general")
+            response = client.post(
+                "/chat",
+                json={"message": "hi", "session_id": "someone-elses"},
+                headers=_auth_headers(),
+            )
+        assert response.status_code == 403
+        # 越权请求不应该读历史、也不应该落库
+        mock_db.load_history.assert_not_called()
+        mock_db.save_message.assert_not_called()
+
+    def test_chat_stream_403_when_session_belongs_to_other_user(self, client):
+        agent = MagicMock()
+        mock_db = _patch_db_and_intent()
+        mock_db.get_session_owner = AsyncMock(return_value="999")
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="general")
+            response = client.post(
+                "/chat_stream",
+                json={"message": "hi", "session_id": "someone-elses"},
+                headers=_auth_headers(),
+            )
+        assert response.status_code == 403
+        mock_db.load_history.assert_not_called()
+
+    def test_chat_ok_when_session_owner_is_current_user(self, client, fake_agent):
+        mock_db = _patch_db_and_intent()
+        mock_db.get_session_owner = AsyncMock(return_value="1")
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="general")
+            response = client.post(
+                "/chat",
+                json={"message": "hi", "session_id": "mine"},
+                headers=_auth_headers(),
+            )
+        assert response.status_code == 200
+        assert response.json()["session_id"] == "mine"
 
 
 # ──────────────────────────────────────────────
@@ -660,3 +719,164 @@ class TestHealthEndpoint:
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "healthy"
+
+
+# ──────────────────────────────────────────────
+# error 级约束：真的要拦，而不是只打日志
+# ──────────────────────────────────────────────
+class TestConstraintBlocking:
+    """error 级违规必须替换回复；warning 级仍然只修不拦。"""
+
+    def _agent_returning(self, reply: str) -> MagicMock:
+        agent = MagicMock()
+        agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [HumanMessage(content="hi"), AIMessage(content=reply)],
+            }
+        )
+        return agent
+
+    def test_blocked_error_level_violation(self, client):
+        """索要密码 → 回复被替换成安全话术，blocked=True。"""
+        import src.api.app as app_module
+
+        mock_db = _patch_db_and_intent()
+        agent = self._agent_returning("为了核实身份，请提供您的密码。")
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="query_order")
+            response = client.post("/chat", json={"message": "hi"}, headers=_auth_headers())
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["blocked"] is True
+        assert data["reply"] == app_module.BLOCKED_REPLY
+        # 入库的也必须是安全话术，不能把违规文本留在历史里
+        saved = mock_db.save_message.call_args_list[-1]
+        assert saved.args[2] == app_module.BLOCKED_REPLY
+
+    def test_warning_level_is_fixed_not_blocked(self, client):
+        """绝对化用语 → 自动软化，不阻断。"""
+        mock_db = _patch_db_and_intent()
+        agent = self._agent_returning("我们保证明天一定送达。")
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="query_order")
+            response = client.post("/chat", json={"message": "hi"}, headers=_auth_headers())
+
+        data = response.json()
+        assert data["blocked"] is False
+        assert "保证" not in data["reply"]
+        assert "一定" not in data["reply"]
+
+    def test_append_ticket_id_prevents_blocking(self, client):
+        """建了单但回复没带工单号 → 自动补号后不再判定为阻断。"""
+        mock_db = _patch_db_and_intent()
+        agent = MagicMock()
+        agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [
+                    HumanMessage(content="帮我建单"),
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "name": "create_ticket",
+                                "args": {"order_id": "12345", "reason": "物流异常"},
+                            }
+                        ],
+                    ),
+                    ToolMessage(
+                        tool_call_id="call_1",
+                        content='{"ticket_id": 42, "order_id": "12345", "status": "待处理"}',
+                    ),
+                    AIMessage(content="已经帮您创建工单，稍后人工会联系您。"),
+                ]
+            }
+        )
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="create_ticket")
+            response = client.post("/chat", json={"message": "帮我建单"}, headers=_auth_headers())
+
+        data = response.json()
+        assert data["blocked"] is False
+        assert "42" in data["reply"]
+        assert "工单信息" in data["reply"]
+
+
+class TestChatStreamDoneEvent:
+    """流式接口的 done 事件必须带上最终 reply（否则前端看到的是修复前的文本）。"""
+
+    def test_done_carries_fixed_reply(self, client):
+        agent = MagicMock()
+
+        class _Out:
+            tool_calls = None
+
+        async def fake_stream(*args, **kwargs):
+            yield {
+                "event": "on_chat_model_stream",
+                "run_id": "r1",
+                "data": {"chunk": MagicMock(content="我们保证明天一定送达。")},
+            }
+            yield {"event": "on_chat_model_end", "run_id": "r1", "data": {"output": _Out()}}
+
+        agent.astream_events = MagicMock(return_value=fake_stream())
+
+        mock_db = _patch_db_and_intent()
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="query_order")
+            response = client.post("/chat_stream", json={"message": "hi"}, headers=_auth_headers())
+
+        body = response.text
+        assert '"type": "done"' in body
+        # done 事件里的最终文本是修复后的版本；前面的 token 事件仍是原文，
+        # 前端收到 done 后会用 reply 覆盖渲染（见 demo/index.html）。
+        assert '"blocked": false' in body
+        assert '"reply": "我们预计明天大概率送达。"' in body
+
+    def test_done_carries_blocked_reply(self, client):
+        import src.api.app as app_module
+
+        agent = MagicMock()
+
+        class _Out:
+            tool_calls = None
+
+        async def fake_stream(*args, **kwargs):
+            yield {
+                "event": "on_chat_model_stream",
+                "run_id": "r1",
+                "data": {"chunk": MagicMock(content="为了核实身份，请提供您的密码。")},
+            }
+            yield {"event": "on_chat_model_end", "run_id": "r1", "data": {"output": _Out()}}
+
+        agent.astream_events = MagicMock(return_value=fake_stream())
+
+        mock_db = _patch_db_and_intent()
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="query_order")
+            response = client.post("/chat_stream", json={"message": "hi"}, headers=_auth_headers())
+
+        body = response.text
+        assert '"blocked": true' in body
+        assert app_module.BLOCKED_REPLY in body

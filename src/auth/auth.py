@@ -19,6 +19,7 @@
 
 import time
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -48,7 +49,7 @@ class _BlacklistBackend:
     因此长期运行不会无限增长（#16 原实现 set 永不淘汰 → 内存只增不减）。
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # token -> 过期时间戳（epoch seconds）。超过该时间即自动失效。
         self._tokens: dict[str, float] = {}
 
@@ -81,7 +82,7 @@ class _BlacklistBackend:
 _blacklist_backend: _BlacklistBackend = _BlacklistBackend()
 
 
-def set_blacklist_backend(backend) -> None:
+def set_blacklist_backend(backend: Any) -> None:
     """Replace blacklist backend (inject Redis for multi-instance deployment)."""
     global _blacklist_backend
     _blacklist_backend = backend
@@ -135,7 +136,7 @@ def _encode(payload: dict) -> str:
     """内部编码工具：统一用 settings 里的密钥和算法。"""
     from jose import jwt
 
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return str(jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm))
 
 
 def _decode(token: str) -> dict:
@@ -143,7 +144,10 @@ def _decode(token: str) -> dict:
     from jose import jwt
 
     try:
-        return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        decoded: dict[str, Any] = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        return dict(decoded)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

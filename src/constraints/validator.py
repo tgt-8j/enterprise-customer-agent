@@ -32,15 +32,54 @@ _ABSOLUTE_GUARANTEE_WORDS = ["保证", "一定", "绝对", "100%", "必然", "�
 # 配送相关关键词
 _DELIVERY_KEYWORDS = ["送达", "到达", "到的", "发货", "配送"]
 
-# 工单号模式：兼容两种编号
-# - 数据库自增工单号：纯数字（create_ticket 工具当前返回 int 自增 ticket_id）
-# - 业务工单号：TC + 6~12 位数字（外部系统/未来业务编号规范）
-# 用交替模式让两种格式都能被"包含工单号"检查命中，
-# 避免校验器与 create_ticket 的实际返回格式脱节（见 tools.py create_ticket）。
-_TICKET_ID_RE = re.compile(r"(?:TC\d{6,12}|\d{1,20})")
+# 工单号模式：必须带"工单"或 TC 前缀，绝不匹配裸数字。
+# 旧实现是 (?:TC\d{6,12}|\d{1,20})，任何数字都算命中：
+# 回复里出现"48小时""7天""2026年"就会让「已建单必须带工单号」这条校验恒为通过，
+# 连带 AutoFixer 补工单号也永远不会触发 —— README 主推的特性是死代码。
+TICKET_ID_RE = re.compile(r"TC\d{6,12}|工单\s*号?\s*[:：]?\s*\d{1,20}")
 
 # 政策来源标注模式：[来源: xxx] 或 "根据《xxx》"
 _POLICY_SOURCE_RE = re.compile(r"\[来源:.*?\]|根据《[^》]+》")
+
+
+def contains_ticket_id(output: str, ticket_id: str | None) -> bool:
+    """判断回复里是否提到了「本次创建的那个工单号」。
+
+    有 ticket_id 时按精确数字边界匹配（"工单号 1" 命中，"12" 不会命中 "1"）；
+    没有 ticket_id（例如只传了 ticket_created）时退回带"工单/TC"锚点的通用模式。
+    这样"48小时"这类普通数字不会被误判成工单号。
+    """
+    if ticket_id:
+        return re.search(rf"(?<!\d){re.escape(ticket_id)}(?!\d)", output) is not None
+    return TICKET_ID_RE.search(output) is not None
+
+
+# 退款承诺短语（用于 promise_refund_without_verification）
+_REFUND_PROMISE_RE = re.compile(r"可以退|给您退|全额退|马上退|立即退")
+# 出现这些否定词时，前面的"可以退"是政策条款而不是承诺
+_NEGATION_PREFIXES = ("不", "无法", "不能", "暂", "尚未")
+
+# 具体订单事实（用于 fabricate_order_info）：订单号 / 订单状态 / 物流进展
+_FABRICATE_ORDER_INFO_RE = re.compile(
+    r"订单号\s*[:：]?\s*\d{6,}"
+    r"|订单状态为"
+    r"|您的订单(?:已经|已)(?:发货|签收|到达|出库|完成|取消)"
+    r"|物流(?:信息|轨迹|状态)?显示"
+)
+
+
+def _has_unnegated_refund_promise(output: str) -> bool:
+    """是否出现「未被否定的」退款承诺。
+
+    "不可以退" / "无法给您退" 是政策条款，不算承诺；
+    "可以给您全额退款" 才是承诺。
+    """
+    for match in _REFUND_PROMISE_RE.finditer(output):
+        prefix = output[max(0, match.start() - 4) : match.start()]
+        if any(neg in prefix for neg in _NEGATION_PREFIXES):
+            continue
+        return True
+    return False
 
 
 @dataclass
@@ -78,7 +117,7 @@ class ConstraintValidator:
         result = validator.validate_output("customer_service", "您的订单...", context={"ticket_created": True})
     """
 
-    def __init__(self, constraints_file: str | None = None):
+    def __init__(self, constraints_file: str | None = None) -> None:
         path = constraints_file or Path(__file__).parent / "constraints.yaml"
         with open(path, encoding="utf-8") as f:
             self._config: dict[str, Any] = yaml.safe_load(f)
@@ -99,7 +138,7 @@ class ConstraintValidator:
             "chitchat": "chitchat",
         }
         agent_id = intent_to_agent.get(agent_id, agent_id)
-        return agents.get(agent_id, {})
+        return dict(agents.get(agent_id) or {})
 
     def validate_tool_call(self, agent_id: str, tool_name: str) -> ValidationResult:
         """
@@ -165,12 +204,14 @@ class ConstraintValidator:
         auto_fixable: list[str] = []
 
         # ---- 检查 forbidden_actions（通过输出内容推断）----
-        output_lower = output.lower()
-
         if "ask_for_password_or_ssn" in forbidden_actions:
-            # 只检测"索要/要求提供"类表达，不匹配"已存储/不会透露"等被动描述
+            # 只检测"索要/要求提供"类表达，不匹配"已存储/不会透露"等被动描述。
+            # 旧正则里的 [密码] 是字符类（等于"密"或"码"），"请稍等，我在查订单编码"
+            # 都会被判成索要密码；这里改成"请求动词 + 敏感信息名词"的组合。
+            # 这条规则是 error 级、现在会真的拦截回复，所以精度必须够。
             if re.search(
-                r"(请.*[密码]|提供.*[密码]|请输入密码|SSN|身份证号|索要.*身份)",
+                r"请.{0,6}?(提供|输入|告知|告诉|发送|填写|核对).{0,10}?"
+                r"(密码|验证码|身份证|SSN|社保号)|索要.{0,6}?(密码|身份证|SSN|验证码)",
                 output,
             ):
                 violations.append(
@@ -194,28 +235,30 @@ class ConstraintValidator:
                 )
 
         if "promise_refund_without_verification" in forbidden_actions:
-            # 检测到明确承诺退款但上下文中没有订单核实信息
-            if re.search(r"可以退|给您退|全额退|马上退", output_lower):
-                if not context.get("order_verified"):
-                    violations.append(
-                        Violation(
-                            rule="promise_refund_without_verification",
-                            severity="error",
-                            detail="输出中承诺退款但未核实订单信息",
-                        )
+            # 检测到明确承诺退款但上下文中没有订单核实信息。
+            # 必须排除否定式（"已拆封的商品不可以退"），否则政策类回答会被误拦；
+            # 这条规则是 error 级、现在会真的替换回复，误报的代价比以前大得多。
+            if _has_unnegated_refund_promise(output) and not context.get("order_verified"):
+                violations.append(
+                    Violation(
+                        rule="promise_refund_without_verification",
+                        severity="error",
+                        detail="输出中承诺退款但未核实订单信息",
                     )
+                )
 
         if "fabricate_order_info" in forbidden_actions:
-            # 检测到明确陈述具体订单事实（订单号/状态/金额）但上下文中没有核实依据
-            if re.search(r"(订单号\s*[:：]?\s*\d{6,}|您的订单已|订单状态为)", output):
-                if not context.get("order_verified"):
-                    violations.append(
-                        Violation(
-                            rule="fabricate_order_info",
-                            severity="error",
-                            detail="输出中包含具体订单信息但未核实",
-                        )
+            # 检测到明确陈述具体订单事实（订单号/状态/物流进展）但上下文中没有核实依据。
+            # 收窄到"具体的订单事实"，不再用裸的"您的订单已"：政策类回答里
+            # "您的订单已超过7天，不符合无理由退货条件"会被这句话误伤。
+            if _FABRICATE_ORDER_INFO_RE.search(output) and not context.get("order_verified"):
+                violations.append(
+                    Violation(
+                        rule="fabricate_order_info",
+                        severity="error",
+                        detail="输出中包含具体订单信息但未核实",
                     )
+                )
 
         if "disclose_competitor_pricing" in forbidden_actions:
             competitor_keywords = ["竞品", "竞争对手", "某品牌价格", "别家", "友商"]
@@ -255,7 +298,9 @@ class ConstraintValidator:
             auto_fixable.append("truncate_output")
 
         if "must_include_ticket_id_if_ticket_created" in output_constraints:
-            if context.get("ticket_created") and not _TICKET_ID_RE.search(output):
+            if context.get("ticket_created") and not contains_ticket_id(
+                output, context.get("ticket_id")
+            ):
                 violations.append(
                     Violation(
                         rule="must_include_ticket_id",

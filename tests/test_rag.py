@@ -157,3 +157,75 @@ class TestSearch:
         with patch("src.retrieval.rag.get_collection", side_effect=Exception("test error")):
             result = search("test")
             assert "检索失败" in result
+
+
+class TestHybridFallback:
+    """Hybrid 检索的两条关键保证。
+
+    1. BM25 索引必须能在服务进程里懒加载（此前只在建库脚本里初始化，
+       线上服务进程永远是 None，Hybrid 名存实亡）；
+    2. embedding 故障时 BM25 结果必须留下来（此前被 reranker 的
+       `similarity > 0.3` 全部滤掉，返回「未找到相关信息」）。
+    """
+
+    def test_bm25_is_lazily_built_from_collection(self):
+        """未建过索引时，从 Chroma 回灌文档重建，检索能命中。"""
+        from src.retrieval.rag import search
+
+        mock_coll = MagicMock()
+        mock_coll.count.return_value = 1
+        mock_coll.get.return_value = {
+            "documents": ["支持七天无理由退货。"],
+            "metadatas": [{"source": "02-七天无理由退货"}],
+        }
+        mock_coll.query.return_value = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+        with (
+            patch("src.retrieval.rag.get_collection", return_value=mock_coll),
+            patch("src.retrieval.rag.embed_texts", return_value=[[0.1] * 4]),
+        ):
+            result = search("退货")
+
+        assert "未找到" not in result
+        assert "02-七天无理由退货" in result
+        assert "仅 BM25 命中" in result
+
+    def test_embedding_failure_degrades_to_bm25(self):
+        """embedding 挂掉时仍返回 BM25 命中，而不是「未找到」。"""
+        from src.retrieval.bm25 import BM25Retriever
+        from src.retrieval.rag import search
+
+        retriever = BM25Retriever()
+        retriever.build(["支持七天无理由退货。"], ["02-七天无理由退货"])
+
+        mock_coll = MagicMock()
+        mock_coll.count.return_value = 1
+
+        with (
+            patch("src.retrieval.rag.get_collection", return_value=mock_coll),
+            patch("src.retrieval.rag._bm25_retriever", retriever),
+            patch("src.retrieval.rag.embed_texts", side_effect=RuntimeError("embedding down")),
+        ):
+            result = search("退货")
+
+        assert "未找到" not in result
+        assert "02-七天无理由退货" in result
+
+    def test_reranker_keeps_bm25_only_candidates(self):
+        """第一级粗筛只丢「有向量分但偏低」的，不能丢「没有向量分」的。"""
+        from src.retrieval.reranker import two_stage_rerank
+
+        results = two_stage_rerank(
+            [
+                {"document": "只被 BM25 召回", "source": "01-退货"},
+                {"document": "向量分很低", "source": "02-物流"},
+                {"document": "向量分很高", "source": "03-价保"},
+            ],
+            [None, 0.1, 0.9],
+        )
+
+        documents = [r.document for r in results]
+        assert "只被 BM25 召回" in documents
+        assert "向量分很低" not in documents
+        assert "向量分很高" in documents
+        assert next(r for r in results if r.document == "只被 BM25 召回").similarity is None

@@ -31,6 +31,7 @@ import os
 import time
 from enum import Enum
 from functools import lru_cache
+from typing import Any
 
 import chromadb
 import httpx
@@ -82,8 +83,7 @@ RERANK_TOP_K_FINAL = 5  # 第二级精排最终条数
 NOT_FOUND_MSG = "未找到相关信息"
 KB_NOT_BUILT_MSG = "知识库尚未建立，请先运行 python scripts/build_kb.py 建库"
 
-# 进程内缓存 collection 句柄
-_collection_cache = None
+# 进程内缓存 collection 句柄（lru_cache 单例，见 get_collection）
 _bm25_retriever = None
 
 
@@ -94,7 +94,7 @@ class _CircuitState(Enum):
     HALF_OPEN = "half_open"  # 探活恢复
 
 
-_circuit = {
+_circuit: dict[str, Any] = {
     "state": _CircuitState.CLOSED,
     "last_failure_time": 0.0,
     "consecutive_failures": 0,
@@ -270,18 +270,19 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 # ---------- 4. ChromaDB 操作 ----------
 @lru_cache(maxsize=1)
-def get_collection():
-    """获取或创建 ChromaDB 集合（单例）。"""
-    global _collection_cache
-    if _collection_cache is not None:
-        return _collection_cache
+def get_collection() -> Any:
+    """获取或创建 ChromaDB 集合（lru_cache 单例）。
+
+    只用 lru_cache 一层缓存：此前另有一个模块级 `_collection_cache`，
+    重建知识库时 `cache_clear()` 只清了 lru，模块变量仍持有已删除的旧
+    collection 对象，`--rebuild` 路径后续 add 会报「collection does not exist」。
+    """
     os.makedirs(CHROMA_DIR, exist_ok=True)
     client = chromadb.PersistentClient(path=CHROMA_DIR)
-    _collection_cache = client.get_or_create_collection(
+    return client.get_or_create_collection(
         name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},
     )
-    return _collection_cache
 
 
 # ---------- 5. 建库 ----------
@@ -339,17 +340,44 @@ def _init_bm25(texts: list[str], sources: list[str]) -> None:
     from src.retrieval.bm25 import BM25Retriever
 
     _bm25_retriever = BM25Retriever()
-    _bm25_retriever.build(texts)
+    _bm25_retriever.build(texts, sources)
     logger.info("BM25 索引构建完成，覆盖 %d 个 chunk", len(texts))
 
 
+def _ensure_bm25(collection: Any) -> None:
+    """确保 BM25 索引可用：进程内没建过就从向量库里把 chunk 回灌重建。
+
+    为什么必须有这一步：`_init_bm25` 只在 `build_knowledge_base()` 里调用，
+    而线上服务是「先跑 build_kb.py 建库、再起 uvicorn」两个进程。服务进程里
+    `_bm25_retriever` 永远是 None，`search()` 只走向量检索——README 里的
+    Hybrid Search 在实际运行的服务上从来没有生效过。
+
+    这里用 collection.get() 一次性把文档取回来重建索引（几百篇短文档，
+    毫秒级），失败则静默降级为纯向量检索，不影响主链路。
+    """
+    if _bm25_retriever is not None:
+        return
+    try:
+        data = collection.get(include=["documents", "metadatas"])
+        documents = [d for d in (data.get("documents") or []) if d]
+        if not documents:
+            return
+        metadatas = data.get("metadatas") or []
+        sources = [
+            (metadatas[i] or {}).get("source", "未知来源") if i < len(metadatas) else "未知来源"
+            for i in range(len(documents))
+        ]
+        _init_bm25(documents, sources)
+    except Exception as e:  # 懒加载失败不能影响检索主链路
+        logger.warning("BM25 索引懒加载失败，本次降级为纯向量检索: %s", e)
+
+
 def _get_bm25_results(query: str, top_k: int = BM25_TOP_K) -> list[tuple[str, str, float]]:
-    """获取 BM25 检索结果，失败时静默降级。"""
+    """获取 BM25 检索结果，失败时静默降级。返回 [(document, source, score)]。"""
     if _bm25_retriever is None:
         return []
     try:
-        results = _bm25_retriever.search(query, top_k=top_k)
-        return [(doc, "bm25", score) for doc, score in results]
+        return _bm25_retriever.search(query, top_k=top_k)
     except Exception as e:
         logger.warning("BM25 检索异常，降级为纯向量检索: %s", e)
         return []
@@ -360,27 +388,32 @@ def _rrf_fuse(
     vector_results: list[tuple[float, str, str]],
     bm25_results: list[tuple[str, str, float]],
     k: int = RRF_K,
-) -> list[tuple[str, str, float, float]]:
+) -> list[tuple[float | None, str, str, float]]:
     """Reciprocal Rank Fusion 融合两路检索结果。
 
     公式：score(doc) = sum(1 / (k + rank_i)) for each retrieval list containing doc
-    返回 [(similarity, source, document, rrf_score), ...]
+    返回 [(vector_similarity, source, document, rrf_score), ...]
+
+    vector_similarity 为 None 表示该文档只被 BM25 召回（没有向量分数）。
+    以前这里统一填 0.0，下游 reranker 用 `similarity > 0.3` 过滤时会把
+    BM25 独有结果全部丢掉 —— 于是「embedding 挂了降级为纯 BM25」实际返回
+    「未找到相关信息」。用 None 把「没有向量分」和「向量分很低」区分开。
     """
     from collections import defaultdict
 
     rrf_scores: dict[str, float] = defaultdict(float)
-    doc_info: dict[str, tuple[float, str]] = {}  # doc_text -> (similarity, source)
+    doc_info: dict[str, tuple[float | None, str]] = {}  # doc_text -> (similarity, source)
 
     # 向量检索结果（已按相似度排序）
     for rank, (sim, source, doc) in enumerate(vector_results, start=1):
         rrf_scores[doc] += 1.0 / (k + rank)
         doc_info[doc] = (sim, source)
 
-    # BM25 结果
-    for rank, (doc, source, score) in enumerate(bm25_results, start=1):
+    # BM25 结果：来源用文档自己的来源，而不是塞一个字面量 "bm25"
+    for rank, (doc, source, _score) in enumerate(bm25_results, start=1):
         rrf_scores[doc] += 1.0 / (k + rank)
         if doc not in doc_info:
-            doc_info[doc] = (0.0, source)
+            doc_info[doc] = (None, source)
 
     # 按 RRF 分数排序
     fused = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
@@ -395,7 +428,7 @@ def search(query: str, top_k: int = 3) -> str:
     组织成自然语言回复。注意这个函数永远不抛异常：
     - 知识库没建 / 为空   -> 提示先建库
     - 检索结果为空        -> "未找到相关信息"
-    - embedding 接口挂了  -> 明确失败说明
+    - embedding 接口挂了  -> 用 BM25 结果兜底（RRF 里保留「无向量分」的候选）
     - BM25 不可用        -> 自动降级为纯向量检索
 
     这样 Agent 在任何情况下都能把结果继续往下说，而不是整条链路 500。
@@ -426,6 +459,8 @@ def search(query: str, top_k: int = 3) -> str:
             logger.warning("向量检索异常，降级: %s", e)
 
         # --- 第 2 步：BM25 检索 ---
+        # 先确保索引存在：服务进程启动后直接检索时，索引还没建过（见 _ensure_bm25）
+        _ensure_bm25(collection)
         bm25_hits = _get_bm25_results(query)
 
         # --- 第 3 步：RRF 融合 ---
@@ -436,8 +471,9 @@ def search(query: str, top_k: int = 3) -> str:
         # --- 第 4 步：两级 Rerank ---
         from src.retrieval.reranker import check_conflicts, two_stage_rerank
 
+        # 不再伪造 chunk_index=0：reranker 不用这个字段，留着只会误导
         candidates = [
-            {"document": doc, "source": source, "chunk_index": 0}
+            {"document": doc, "source": source}
             for _, source, doc, _ in fused[:RRERANK_TOP_K_COARSE]
         ]
         similarities = [sim for sim, _, _, _ in fused[:RRERANK_TOP_K_COARSE]]
@@ -447,8 +483,11 @@ def search(query: str, top_k: int = 3) -> str:
         # --- 第 5 步：格式化输出 ---
         lines = []
         for i, r in enumerate(reranked, start=1):
+            vector_part = (
+                "仅 BM25 命中" if r.similarity is None else f"向量相似度 {r.similarity:.2f}"
+            )
             lines.append(
-                f"[{i}]（来源: {r.source}，向量相似度 {r.similarity:.2f}，"
+                f"[{i}]（来源: {r.source}，{vector_part}，"
                 f"综合得分 {r.final_score:.2f}）\n{r.document}"
             )
         if not lines:

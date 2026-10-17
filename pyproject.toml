@@ -28,3 +28,16 @@ python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+# 第三方库没有 py.typed / 类型存根：显式声明忽略，而不是把 mypy 从 CI 里拿掉。
+[[tool.mypy.overrides]]
+module = [
+    "jose",
+    "jose.*",
+    "python_json_logger",
+    "chromadb",
+    "chromadb.*",
+    "langchain_mcp_adapters",
+    "langchain_mcp_adapters.*",
+]
+ignore_missing_imports = true

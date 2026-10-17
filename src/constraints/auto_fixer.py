@@ -18,7 +18,8 @@
 from __future__ import annotations
 
 import logging
-import re
+
+from src.constraints.validator import TICKET_ID_RE, contains_ticket_id
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +88,9 @@ class AutoFixer:
         ticket_id = context.get("ticket_id", "")
         if not ticket_id:
             return output
-        # 避免重复追加：既匹配 TC 前缀工单号，也匹配纯数字工单号
-        # （create_ticket 返回自增 int，历史/外部系统可能用 TC 前缀）
-        if re.search(r"(?:TC\d{6,12}|\d{1,20})", output):
+        # 避免重复追加：回复里已经有本次工单号（或任意"工单号/TC"形式的编号）就不再加。
+        # 这里必须用带"工单/TC"锚点的模式，否则回复里出现"48小时"就会跳过补号。
+        if contains_ticket_id(output, str(ticket_id)) or TICKET_ID_RE.search(output):
             return output
         suffix = f"\n\n【工单信息】您的工单号：{ticket_id}，我们将在 24 小时内处理并短信通知您。"
         logger.debug("自动添加工单号: %s", ticket_id)

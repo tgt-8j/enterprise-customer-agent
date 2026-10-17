@@ -14,11 +14,12 @@ LLM 只在这里初始化一次，其他地方都不应该直接 new 一个 Chat
 """
 
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from src.config.settings import settings
 
 
-def get_llm():
+def get_llm() -> ChatOpenAI:
     """
     从 config.py 读取配置，返回一个已绑定好的 ChatOpenAI 实例。
 
@@ -34,7 +35,7 @@ def get_llm():
         raise RuntimeError("没有找到 LLM_API_KEY，请复制 .env.example 为 .env 并填入你的真实 key")
 
     return ChatOpenAI(
-        api_key=settings.llm_api_key,
+        api_key=SecretStr(settings.llm_api_key),
         base_url=settings.llm_base_url or None,
         model=settings.llm_model_name,
         temperature=0,

@@ -460,3 +460,175 @@ class TestChatIntegration:
         """无 token 时 /chat_stream 返回 401。"""
         resp = client_no_auth.post("/chat_stream", json={"message": "你好"})
         assert resp.status_code == 401
+
+
+# ── 工单号必须精确匹配，不能被普通数字蒙混过关 ────────────────────────────
+
+
+class TestTicketIdIsNotAnyNumber:
+    """此前 TICKET_ID_RE 是 (?:TC\\d{6,12}|\\d{1,20})，"48小时" 也算命中。
+
+    结果是「已建单必须带工单号」恒为通过、AutoFixer 补号永不触发。
+    """
+
+    def test_plain_digits_do_not_satisfy_ticket_id(self):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "customer_service",
+            "您的订单会在48小时内发货。",
+            context={"ticket_created": True, "ticket_id": "42"},
+        )
+        assert any(x.rule == "must_include_ticket_id" for x in r.violations)
+        assert "add_ticket_id" in r.auto_fixable
+
+    def test_same_digits_in_other_number_do_not_match(self):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "customer_service",
+            "已为您创建工单，编号 142，请查收。",
+            context={"ticket_created": True, "ticket_id": "42"},
+        )
+        # 142 里虽然包含 "42"，但不是本次工单号
+        assert any(x.rule == "must_include_ticket_id" for x in r.violations)
+
+    def test_exact_ticket_id_satisfies(self):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "customer_service",
+            "已为您创建工单，工单号 42，请查收。",
+            context={"ticket_created": True, "ticket_id": "42"},
+        )
+        assert not any(x.rule == "must_include_ticket_id" for x in r.violations)
+
+    def test_autofix_appends_even_when_reply_has_other_numbers(self):
+        fixer = AutoFixer()
+        fixed = fixer.fix_output(
+            "已受理，预计48小时内处理。",
+            ["add_ticket_id"],
+            context={"ticket_created": True, "ticket_id": "42"},
+        )
+        assert "工单信息" in fixed
+        assert "42" in fixed
+
+
+class TestBlockingPrecision:
+    """error 级规则现在会真的拦回复，所以不能误伤政策类回答。"""
+
+    def test_negated_refund_is_not_a_promise(self):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "customer_service",
+            "已拆封的商品不可以退，请确认商品完好。",
+            context={"order_verified": False},
+        )
+        assert not any(x.rule == "promise_refund_without_verification" for x in r.violations)
+
+    def test_policy_statement_about_order_age_is_not_fabrication(self):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "customer_service",
+            "您的订单已超过7天，不符合无理由退货条件。",
+            context={"order_verified": False},
+        )
+        assert not any(x.rule == "fabricate_order_info" for x in r.violations)
+
+    def test_specific_order_fact_without_verification_is_flagged(self):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "customer_service",
+            "您的订单已发货，预计明天送达。",
+            context={"order_verified": False},
+        )
+        assert any(x.rule == "fabricate_order_info" for x in r.violations)
+
+    def test_asking_for_order_number_is_not_password_request(self):
+        v = ConstraintValidator()
+        r = v.validate_output("customer_service", "请提供您的订单号，我帮您查一下。", context={})
+        assert not any(x.rule == "ask_for_password_or_ssn" for x in r.violations)
+
+
+class TestValidationContextFromToolResults:
+    """上下文必须从工具真实返回推导，不能硬编码 order_verified=True。"""
+
+    def test_query_order_success_verifies_order(self):
+        from src.api.app import build_validation_context
+
+        ctx = build_validation_context([("query_order", '{"order_id": "9527"}')])
+        assert ctx["order_verified"] is True
+
+    def test_query_order_failure_does_not_verify(self):
+        from src.api.app import build_validation_context
+
+        ctx = build_validation_context([("query_order", '{"error": "订单 9999 不存在"}')])
+        assert ctx["order_verified"] is False
+
+    def test_create_ticket_failure_is_not_counted_as_created(self):
+        from src.api.app import build_validation_context
+
+        ctx = build_validation_context([("create_ticket", '{"error": "数据库暂时不可用"}')])
+        assert ctx["ticket_created"] is False
+        assert ctx["ticket_id"] is None
+
+    def test_create_ticket_success_exposes_ticket_id(self):
+        from src.api.app import build_validation_context
+
+        ctx = build_validation_context(
+            [("query_order", '{"order_id": "9527"}'), ("create_ticket", '{"ticket_id": 42}')]
+        )
+        assert ctx == {"ticket_created": True, "ticket_id": "42", "order_verified": True}
+
+
+class TestConstraintBlocking:
+    """error 级违规现在真的会拦截（把回复替换为安全话术）。"""
+
+    def test_unfixable_error_is_blocked(self):
+        from src.api.app import BLOCKED_REPLY, apply_constraints
+
+        reply, blocked = apply_constraints("query_order", "请提供您的密码。", {})
+        assert blocked is True
+        assert reply == BLOCKED_REPLY
+
+    def test_refund_without_verified_order_is_blocked(self):
+        from src.api.app import apply_constraints
+
+        _reply, blocked = apply_constraints(
+            "query_order", "没问题，我们可以给您全额退款。", {"order_verified": False}
+        )
+        assert blocked is True
+
+    def test_refund_with_verified_order_is_not_blocked(self):
+        from src.api.app import apply_constraints
+
+        reply, blocked = apply_constraints(
+            "query_order", "核实订单后，可以给您全额退款。", {"order_verified": True}
+        )
+        assert blocked is False
+        assert "退款" in reply
+
+    def test_autofix_runs_before_blocking(self):
+        """只是少个工单号 → 补上就好，不该被拦。"""
+        from src.api.app import apply_constraints
+
+        reply, blocked = apply_constraints(
+            "create_ticket",
+            "已为您创建工单，稍后人工联系您。",
+            {"ticket_created": True, "ticket_id": "42", "order_verified": True},
+        )
+        assert blocked is False
+        assert "42" in reply
+
+    def test_warning_only_violation_is_not_blocked(self):
+        from src.api.app import apply_constraints
+
+        reply, blocked = apply_constraints("query_order", "我们保证明天一定送达。", {})
+        assert blocked is False
+        assert "保证" not in reply
+
+    def test_ordinary_digits_do_not_trigger_blocking(self):
+        """回归用例：48小时 / 7天 之类数字不能触发「缺工单号」误拦。"""
+        from src.api.app import apply_constraints
+
+        _reply, blocked = apply_constraints(
+            "query_order", "退款将于 7 天内到账，共 3 个工作日。", {"order_verified": True}
+        )
+        assert blocked is False

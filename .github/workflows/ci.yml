@@ -48,6 +48,9 @@ jobs:
           ruff check .
           ruff format --check .
 
+      - name: Type check with mypy
+        run: mypy src
+
       - name: Run unit tests
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/agent_demo_test
