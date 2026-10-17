@@ -6,6 +6,7 @@
 #
 # 三个服务（MCP 模式）：
 #   mcp_server - 独立工具服务，通过 MCP 协议暴露 query_order / search_knowledge / create_ticket
+#     （已实现并可独立运行；对话主链路仍用进程内工具，原因见 README「MCP 工具服务」一节）
 #
 # 启动（默认模式）：docker compose up -d
 # 启动（MCP 模式）：docker compose --profile mcp up -d
@@ -73,7 +74,8 @@ services:
       - agent-net
 
   # MCP 工具服务（可选，--profile mcp 时启用）
-  # 将三个客服工具暴露为独立服务，支持跨进程调用和多客户端共享
+  # 将三个客服工具暴露为独立服务，支持跨进程调用和多客户端共享。
+  # 注意：对话主链路（/chat）目前不通过它调用工具，见 README。
   mcp_server:
     profiles:
       - mcp

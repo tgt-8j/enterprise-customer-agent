@@ -1,6 +1,6 @@
 # API 文档
 
-所有端点运行在 `http://localhost:8000`，完整交互式文档（Swagger UI）访问 `/docs`。
+所有端点运行在 `http://localhost:8000`（README 里的启动命令用 `--port 8080`，以实际启动参数为准），完整交互式文档（Swagger UI）访问 `/docs`。
 
 ---
 
@@ -129,24 +129,48 @@ Agent 核心接口。支持多轮对话：不传 `session_id` 则自动生成新
       "tool_output": "{\"order_id\":\"9527\",\"status\":\"已发货\",...}"
     }
   ],
-  "session_id": "abc123..."
+  "session_id": "abc123...",
+  "intent": "query_order",
+  "blocked": false
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| reply | string | Agent 的最终回复 |
-| tool_calls | array | 本轮工具调用轨迹，包含工具名、参数和执行结果 |
+| reply | string | Agent 的最终回复；若命中 error 级约束且无法自动修复，会被替换为标准安全话术 |
+| tool_calls | array | 本轮工具调用轨迹，包含工具名、参数和执行结果（结果截断 200 字） |
 | tool_calls[].tool_name | string | 工具名：`query_order` / `search_knowledge` / `create_ticket` |
 | tool_calls[].tool_input | object | 工具入参 |
-| tool_calls[].tool_output | string | 工具返回值（JSON 字符串） |
+| tool_calls[].tool_output | string | 工具返回值摘要（前 200 字） |
 | session_id | string | 会话 ID，多轮对话时传入上轮的 session_id 以续接上下文 |
+| intent | string | 意图分发结果：`query_order` / `knowledge_search` / `create_ticket` / `chitchat` |
+| blocked | bool | 是否命中 error 级约束、回复被替换为安全话术 |
 
 **响应头：**
 - `X-Process-Time` — 本次请求耗时（毫秒）
 - `X-Request-ID` — 本次请求唯一标识（用于日志追踪）
 
-**错误码：** `401` 未认证或 token 已过期
+**错误码：**
+- `401` 未认证或 token 已过期
+- `403` 传入的 `session_id` 属于其他用户（会话归属校验，防 IDOR）
+- `422` 请求体校验失败（如 `message` 缺失）
+
+---
+
+### POST /chat_stream — 流式对话（SSE）
+
+请求体与 `/chat` 相同，响应为 `text/event-stream`。事件类型：
+
+| 事件 | 说明 |
+|------|------|
+| `{"type":"token","data":"..."}` | LLM 增量文本 |
+| `{"type":"tool_call","data":{"name":"query_order","status":"start","input":{...}}}` | 工具开始 |
+| `{"type":"tool_call","data":{"name":"query_order","status":"end"}}` | 工具结束 |
+| `{"type":"done","data":{"session_id":"...","tool_calls":[...],"intent":"query_order","reply":"最终文本","blocked":false}}` | 本轮结束 |
+| `{"type":"error","data":"错误信息"}` | 流式过程中出错 |
+
+> **`done.data.reply` 才是最终文本。** 约束校验（补工单号、截断、软化绝对化用语）和 error 级拦截都发生在最后一个 token 之后，
+> 前端必须用 `done` 里的 `reply` 覆盖已渲染内容，否则看到的仍是修复前的文本（`demo/index.html` 已这么做）。
 
 ---
 
@@ -154,12 +178,15 @@ Agent 核心接口。支持多轮对话：不传 `session_id` 则自动生成新
 
 ```
 // Request
-GET /sessions/abc123/history
+GET /sessions/abc123/history?page=1&size=50
 Authorization: Bearer <token>
 
 // Response 200
 {
   "session_id": "abc123",
+  "total": 4,
+  "page": 1,
+  "size": 50,
   "messages": [
     {"role": "user",    "content": "订单9527到哪了",     "created_at": "2025-09-10T10:00:00Z"},
     {"role": "assistant", "content": "您的订单9527...",    "created_at": "2025-09-10T10:00:02Z"},
@@ -169,7 +196,9 @@ Authorization: Bearer <token>
 }
 ```
 
-返回该会话最近 1000 条消息（滑动窗口默认 10 条用于 LLM，但历史记录可查看全部）。
+分页读取：`page` 从 1 起，`size` 默认 50、上限 500。喂给 LLM 的上下文另有滑动窗口（默认最近 10 条，`MAX_HISTORY_MESSAGES` 可配），与这个查看接口无关。
+
+**错误码：** `403` 会话属于其他用户（防 IDOR）。
 
 ---
 

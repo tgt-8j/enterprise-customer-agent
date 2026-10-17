@@ -137,7 +137,10 @@ class BaseConfig(BaseSettings):
     refresh_token_expire_days: int = Field(default=7, ge=1, le=365)
 
     # ---------- MCP 工具集成 ----------
-    use_mcp: bool = Field(default=False, description="是否启用 MCP 协议加载工具")
+    use_mcp: bool = Field(
+        default=False,
+        description="预留开关：MCP Server 与适配层已实现，但对话主链路仍直接调用本地工具（见 README）",
+    )
     mcp_server_url: str = Field(
         default="", description="MCP Server 地址，如 http://localhost:8001/mcp"
     )

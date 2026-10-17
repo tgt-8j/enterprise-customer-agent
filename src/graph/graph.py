@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from src.config.settings import settings
 from src.graph.nodes.tools import ALL_TOOLS
 from src.llm.client import get_llm
 
@@ -171,14 +172,13 @@ async def get_tools_for_intent(intent: str, use_mcp: bool = False) -> list[Any]:
 async def get_mcp_tools() -> list[Any]:
     """通过 MCP 协议加载远程工具，MCP Server 挂掉时自动回退到本地工具。
 
-    MCP Server 地址由 MCP_SERVER_URL 环境变量控制，默认 http://mcp_server:8001/mcp。
+    地址取 settings.mcp_server_url（.env 里的 MCP_SERVER_URL），默认容器网络地址。
+    注意：主链路（/chat、/chat_stream）目前不调用本函数，见 README 的取舍说明。
     """
-    import os
-
     try:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        url = os.getenv("MCP_SERVER_URL", "http://mcp_server:8001/mcp")
+        url = settings.mcp_server_url or "http://mcp_server:8001/mcp"
         client = MultiServerMCPClient(
             {
                 "customer_service": {

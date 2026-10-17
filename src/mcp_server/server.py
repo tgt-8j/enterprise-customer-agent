@@ -9,8 +9,9 @@ Agent 通过 langchain-mcp-adapters 连接并消费工具。
 - create_ticket:     创建人工工单
 
 启动方式：
-    python -m mcp_server              # HTTP 传输，监听 MCP_HOST:MCP_PORT（默认 0.0.0.0:8001）
-    python -m mcp_server --stdio      # stdio 传输，供本地进程调用
+    python -m src.mcp_server.server                      # 默认 streamable-http，监听 0.0.0.0:8001
+    python -m src.mcp_server.server --transport sse      # 换成 SSE 传输
+    docker compose --profile mcp up -d                   # 容器方式（端口 8001）
 """
 
 from fastmcp import FastMCP

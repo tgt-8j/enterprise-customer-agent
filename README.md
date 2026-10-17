@@ -1,9 +1,9 @@
 # Enterprise Customer Service Agent
 
-> 基于 LangGraph + RAG 的企业客服 Agent，支持订单查询、知识库检索和工单创建。手写 LangGraph 工作流实现 ReAct 循环，测试全部通过。
+> 基于 LangGraph + RAG 的企业客服 Agent，支持订单查询、知识库检索和工单创建。手写 LangGraph 工作流实现 ReAct 循环，测试与 CI 均通过。
 
 ```
-232 tests collected · Python 3.12
+269 tests · Python 3.12（21 个 DB 用例在未启动 PostgreSQL 时自动 skip）
 ```
 
 ## 场景演示
@@ -32,10 +32,10 @@ pip install -r requirements-test.txt
 
 # 2. 配置环境变量
 cp .env.example .env
-# 填入 LLM_API_KEY、JWT_SECRET_KEY 等
+# 至少填 LLM_API_KEY；若 embedding 与 chat 不是同一家服务，再填 EMBEDDING_API_KEY
 
-# 3. 启动数据库
-docker compose up -d postgres chroma
+# 3. 启动数据库（ChromaDB 内嵌在应用进程里，不需要单独容器）
+docker compose up -d postgres
 
 # 4. 建库灌数并启动服务
 python scripts/seed_data.py
@@ -88,17 +88,22 @@ python -m uvicorn src.api.app:app --reload --port 8080
 
 ### Embedding 熔断器
 
-embedding 是整个链路最脆弱的外部依赖。实现了一个进程内熔断器：连续失败 3 次后短路 30 秒，避免把压力打在已故障的服务上。失败期间返回明确错误文字，由 Agent 向用户解释，而不是整条链路 500。
+embedding 是整个链路最脆弱的外部依赖。实现了进程内熔断器（三态状态机）：连续失败 3 次后短路 30 秒，避免把压力打在已故障的服务上。熔断期间向量检索直接失败，检索自动降级为 BM25 关键词召回；两者都不可用时才返回明确的错误文字，由 Agent 向用户解释，而不是整条链路 500。
 
 ### 约束验证（Constraint Validation）
 
 借鉴 MediX Agent Swarm 的约束验证理念，但针对客服场景做了定制化改进：
 
-**设计决策**：MediX 的工具白名单违规只打 warning 不阻断，本实现升级为 error 级——工具不在白名单直接拒绝调用。MediX 的输出验证全是关键词匹配（"您患有"→"可能存在"的粗暴替换），本实现分两类：
+**设计决策**：MediX 的工具白名单违规只打 warning。本实现把约束放在两层：
+
+- **图层面**：按意图只 `bind_tools` 该意图允许的工具（`query_order` 意图的图里根本不存在 `create_ticket`），这是硬约束；
+- **审计层**：工具执行后再校验白名单并打指标告警，用于发现「图配错了」这类问题（它是事后审计，不声称能拦住已发生的调用）。
+
+输出验证不是 MediX 那种关键词粗暴替换，而是分两类：
 
 | 违规类型 | 处理方式 | 示例 |
 |----------|---------|------|
-| error 级 | 记录日志 + 监控告警 | 索要密码、承诺退款未核实 |
+| error 级 | 自动修复；修不好就**整条替换为安全话术** + 指标告警 | 索要密码、未核实就承诺退款 |
 | warning 级 | 自动修复 | 工单号缺失、政策来源未标注、绝对化用语 |
 
 **自动修复策略**（确定性，不用 LLM 重写，避免引入新幻觉）：
@@ -108,28 +113,29 @@ embedding 是整个链路最脆弱的外部依赖。实现了一个进程内熔�
 - `add_policy_citation`：政策类回复未标注来源 → 追加知识库来源提示
 - `soften_absolutes`："保证/一定/绝对" → 替换为"预计/大概率/通常"
 
-规则定义在 `constraints/constraints.yaml`，运营可直接修改无需改代码。
+规则定义在 `src/constraints/constraints.yaml`，运营可直接修改无需改代码。
 
 ### 多轮对话记忆
 
 每次请求先查 PostgreSQL 取最近 10 条历史消息（倒序查 LIMIT 再反转，成本恒定），拼成 messages 数组一起喂给模型。用户说"它的快递到哪了"这类代词，模型可以从历史消息中推断订单号，无需重复说明。
 
-## MCP 工具集成（可选）
+## MCP 工具服务（已实现，未接入对话主链路）
 
-默认使用本地 `@tool` 定义，也可切换到 MCP 协议模式：
+三个工具在 `src/mcp_server/server.py` 里用 FastMCP 暴露为独立服务，可以单独跑：
 
 ```bash
-# 默认模式：本地工具
-docker compose up -d
-
-# MCP 模式：工具服务化（需要独立部署 mcp_server）
-docker compose --profile mcp up -d
-# 或通过环境变量启用：USE_MCP=true docker compose up -d
+docker compose --profile mcp up -d      # mcp_server 监听 8001
 ```
 
-MCP 模式下，三个工具通过标准 MCP 协议暴露为独立服务（`mcp_server:8001`），Agent 通过 `langchain-mcp-adapters` 连接并加载工具。Server 挂掉时自动 fallback 到本地工具，保障高可用。
+`src/graph/graph.py` 里的 `get_mcp_tools()` 也用 `langchain-mcp-adapters` 写好了客户端，Server 不可用时自动回退到本地工具。
 
-支持未来接入更多 MCP Server（如 CRM、ERP 等）。
+**但 `/chat` 与 `/chat_stream` 目前仍直接调用进程内 `@tool`，`USE_MCP=true` 不会改变对话行为。** 这是有意的取舍：
+
+- 三个工具与 Agent 同进程、同数据库，走 MCP 只多一跳网络 + 一层序列化，换不来解耦收益；
+- MCP 真正有价值的是接进程外的系统（CRM / ERP / 第三方工单），那时代价才划算；
+- 保留 Server 与适配层，是为了将来接外部工具时不用改图结构。
+
+真要切换时，改动点是 `build_agent()` 里把 `_get_tools_for_intent()` 换成 `await get_mcp_tools()`（图构建要改成异步），并处理启动预热与降级。
 
 ## 三个工具
 
@@ -140,14 +146,14 @@ MCP 模式下，三个工具通过标准 MCP 协议暴露为独立服务（`mcp_
 ## 测试与评测
 
 ```bash
-# 单元测试（232 个，全部通过）
+# 单元测试（269 个；未启动 PostgreSQL 时 21 个 DB 用例自动 skip）
 pytest tests/ -v
 
-# AI 行为评测（26 个场景化用例）
+# AI 行为评测（26 个场景化用例，需要真实 LLM + 已建知识库）
 python evals/run_eval.py
 ```
 
-评测覆盖：工具选择正确性、边界拒绝行为、多轮记忆连续性、RAG 检索命中率、鲁棒性（乱输入不崩溃）、安全性（Prompt 注入防御）、约束验证（工单号补全、政策来源标注、绝对化用语软化）。
+评测覆盖：工具选择正确性、边界拒绝行为、多轮记忆连续性、RAG 检索命中率、鲁棒性（乱输入不崩溃）、安全性（Prompt 注入类输入不越权）、约束验证（工单号补全、政策来源标注、绝对化用语软化、error 级拦截）。
 
 ## 项目结构
 
@@ -171,11 +177,11 @@ enterprise-customer-agent/
 │   │   ├── constraints.yaml
 │   │   ├── validator.py
 │   │   └── auto_fixer.py
-│   ├── mcp_server/      # MCP 工具服务（可选）
+│   ├── mcp_server/      # MCP 工具服务（已实现，未接入对话主链路）
 │   │   └── server.py
 │   ├── metrics/         # Prometheus 指标
 │   └── logging_config.py  # JSON 结构化日志
-├── docker-compose.yml   # 容器编排（app/postgres/chroma/mcp_server）
+├── docker-compose.yml   # 容器编排（app/postgres/mcp_server）
 ├── Dockerfile
 ├── .env.example         # 环境变量配置模板（.env 已 gitignore，勿提交真实 key）
 │
@@ -186,11 +192,12 @@ enterprise-customer-agent/
 │   ├── verify_mcp.py    # MCP 专项验证
 │   └── verify_constraints.py  # 约束验证演示
 │
-├── tests/               # 单元测试（共 232 个，全部通过）
+├── tests/               # 单元测试（269 个，DB 用例需 Postgres）
 │   ├── test_fastapi.py  # FastAPI 层测试
-│   ├── test_agent_legacy.py  # Agent ReAct 循环
-│   ├── test_dispatch.py # 意图分发
-│   ├── test_rag.py      # RAG 检索
+│   ├── test_main_mock.py  # 端点级 mock 测试（含约束拦截、SSE 终态）
+│   ├── test_constraints.py  # 约束验证与自动修复
+│   ├── test_bm25.py     # BM25 中文分词与召回
+│   ├── test_rag.py      # RAG 检索与降级
 │   ├── test_tools.py    # 工具逻辑
 │   └── test_stream.py   # SSE 流式
 │
@@ -205,9 +212,11 @@ enterprise-customer-agent/
 │
 ├── demo/index.html      # 前端对话 Demo 页面
 └── docs/                # 开发文档
+    ├── RUNNING.md       # 运行与验证指南
     ├── api.md           # API 文档
     ├── deploy.md        # 部署指南
-    └── troubleshooting.md  # 常见问题与解决方案
+    ├── troubleshooting.md  # 常见问题与解决方案
+    └── interview_qa.md  # 设计问答（为什么这么实现）
 ```
 
 ## FAQ
@@ -218,11 +227,13 @@ enterprise-customer-agent/
 
 ### Q2：RAG 检索的完整流程是什么？
 
-分两步：**建库**（一次性）扫描 `knowledge/*.md` → 结构感知切分（350 字 chunk + 60 字 overlap）→ Embedding API 向量化 → 写入 ChromaDB（cosine 相似度）。**检索**（每次请求）query 向量化 → ChromaDB 查 top_k=3 → 过滤低于阈值（0.25）的片段 → 返回带来源标注的文本给 Agent。
+**建库**（一次性）：扫描 `knowledge/*.md` → 结构感知切分（350 字 chunk + 60 字 overlap）→ Embedding 向量化 → 写入 ChromaDB（cosine）。
+
+**检索**（每次请求）：query 向量化查 ChromaDB（阈值 0.25）+ BM25 关键词召回（中文按单字 + 二元组切分）→ RRF 融合 → 两级 rerank（相似度粗筛 + 来源权重/位置精排）→ 取 Top-5 带来源标注返回。任一路不可用会自动降级（BM25 挂了走纯向量，embedding 挂了走纯 BM25）。
 
 ### Q3：Embedding 接口挂了怎么办？
 
-实现了进程内熔断器（三态状态机：CLOSED → OPEN → HALF_OPEN）。连续失败 3 次后短路 30 秒，期间直接返回错误文字，避免把压力打在已故障的服务上。
+实现了进程内熔断器（三态状态机：CLOSED → OPEN → HALF_OPEN）。连续失败 3 次后短路 30 秒，期间不再打 embedding 接口：向量检索直接失败，检索由 BM25 兜底；BM25 也没命中时才返回明确的错误文字让 Agent 转述，避免整条链路 500。
 
 ### Q4：多轮对话的记忆是怎么实现的？
 

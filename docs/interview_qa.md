@@ -8,11 +8,11 @@
 
 **项目名**：企业客服 Agent（LangGraph + RAG + FastAPI）
 
-**一句话介绍**：一个手写 LangGraph 工作流的电商客服 Agent，能查订单、查知识库、建工单，支持多轮对话和 JWT 认证，232 个单元测试全通过，26 个场景化 AI 评测用例。
+**一句话介绍**：一个手写 LangGraph 工作流的电商客服 Agent，能查订单、查知识库、建工单，支持多轮对话和 JWT 认证，269 个单元测试，26 个场景化 AI 评测用例。
 
 **技术栈**：Python · FastAPI · LangGraph · PostgreSQL · ChromaDB · JWT · Prometheus · Docker
 
-**代码量**：约 2500 行 Python，232 个单元测试用例（全部通过），26 个场景化 AI 评测用例
+**代码量**：约 3200 行源码 + 3300 行测试，269 个单元测试用例（21 个需要 PostgreSQL），26 个场景化 AI 评测用例
 
 ---
 
@@ -28,7 +28,7 @@ graph TB
         U[用户 / 前端]
     end
 
-    subgraph "API 层  main.py"
+    subgraph "API 层  src/api/app.py"
         MW[中间件：日志 + 指标 + request_id]
         AUTH[JWT Bearer 认证]
         CHAT[POST /chat]
@@ -36,14 +36,14 @@ graph TB
         METRICS[GET /metrics]
     end
 
-    subgraph "Agent 层  agent.py"
+    subgraph "Agent 层  src/graph/graph.py"
         SG[LangGraph StateGraph<br/>手写 ReAct 循环]
         AGENT[agent 节点：LLM 思考<br/>bind_tools() + invoke()]
         TOOLS[ToolNode：工具分发]
         COND{有 tool_calls?}
     end
 
-    subgraph "工具层  tools.py"
+    subgraph "工具层  src/graph/nodes/tools.py"
         QO[query_order<br/>查订单 + 物流]
         SK[search_knowledge<br/>RAG 向量检索]
         CT[create_ticket<br/>创建工单]
@@ -194,7 +194,7 @@ sequenceDiagram
 > 滑动窗口用倒序查 LIMIT 再反转实现：正序查全量再切片会随会话变长越来越慢，倒序+LIMIT 让成本恒定。
 
 **可以追问的细节**：
-- limit 默认 10 条，在 config.py 里可配置
+- limit 默认 10 条，在 src/config/settings.py 里可配置
 - session_id 由前端传，不传就生成一个 UUID
 - 消息按 id 降序排列，保证最新在最前
 
@@ -230,7 +230,7 @@ sequenceDiagram
 >
 > - `chunk_text()` 自己写：LangChain 的 CharacterTextSplitter 是按字符数硬切的，不考虑语义边界。我的实现先按空行/标题切成自然段，再贪心合并，语义完整性更好。
 > - ChromaDB 直接用原生 API：LangChain 的 Chroma 封装没有提供 cosine 空间配置的入口，而且原生 API 更直接，不需要多绕一层。
-> - embedding 自己调 HTTP 接口：因为要支持智谱、DeepSeek 等多个 OpenAI 兼容接口，统一走一个 POST /embeddings 的入口，换厂商只改 config.py 里的 base_url。
+> - embedding 自己调 HTTP 接口：因为要支持智谱、DeepSeek 等多个 OpenAI 兼容接口，统一走一个 POST /embeddings 的入口，换厂商只改 src/config/settings.py 里的 base_url。
 >
 > 这样做的好处是每个环节的参数我都清楚为什么这么设，面试时被问到可以当场展开。
 
@@ -269,7 +269,7 @@ sequenceDiagram
 
 ### Q8：`ensure_tables()` 为什么设计成惰性建表？
 
-> 这是为了服务可用性：import `db.py` 时不碰网络，`create_async_engine` 只创建引擎对象不建立连接。真正建表发生在第一次 DB 操作时（`ensure_tables()` 内部幂等，用 `_tables_lock` 保证只执行一次）。
+> 这是为了服务可用性：import `src/persistence/db.py` 时不碰网络，`create_async_engine` 只创建引擎对象不建立连接。真正建表发生在第一次 DB 操作时（`ensure_tables()` 内部幂等，用 `_tables_lock` 保证只执行一次）。
 >
 > 好处是：即使 PostgreSQL 没启动，FastAPI 服务也能正常起来，错误推迟到工具调用那一刻以明确报错暴露，而不是启动时就崩。这对 Docker Compose 编排很重要——postgres 容器还没 ready 的时候，app 容器可以先启动。
 
@@ -381,7 +381,7 @@ sequenceDiagram
 | 异步架构 | asyncpg + NullPool，工具调用走线程池，事件循环零阻塞 |
 | 全链路 RAG | 从文档加载到向量检索，每步参数都有设计理由 |
 | 生产级工程 | JWT 认证、结构化日志、Prometheus 指标、Docker 部署 |
-| 测试覆盖 | 232 个单元测试全通过，26 个场景化 AI 评测用例（LLM 自评通过率 100%） |
+| 测试覆盖 | 269 个单元测试（21 个 DB 用例需 Postgres），26 个场景化 AI 评测用例 |
 
 ---
 

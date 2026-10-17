@@ -329,7 +329,7 @@ Error: search_knowledge is not a valid tool, try one of [query_order].
 
 **根本原因：**
 
-`main.py` 中使用全局变量 `_agent` 缓存 Agent 实例，但只创建一次：
+`main.py`（重构后为 `src/api/app.py`）中使用全局变量 `_agent` 缓存 Agent 实例，但只创建一次：
 
 ```python
 # 修复前（有 Bug）
@@ -372,21 +372,13 @@ graph.add_node("tools", ToolNode(tools))  # 绑定到工具节点
 
 **修复方案：**
 
-改为按 intent 缓存不同的 agent 实例：
+按 `(intent, use_mcp)` 缓存不同的 agent 实例。当前实现（`src/api/app.py`）用 `@lru_cache`：
 
 ```python
-# 修复后
-_agent_cache = {}
-
-
-def get_agent(intent: str = "general"):
-    """获取指定意图的Agent，按intent缓存不同配置的agent。"""
-    if intent not in _agent_cache:
-        import os
-
-        use_mcp = os.getenv("USE_MCP", "false").lower() == "true"
-        _agent_cache[intent] = build_agent(intent=intent, use_mcp=use_mcp)
-    return _agent_cache[intent]
+@lru_cache(maxsize=16)
+def get_agent(intent: str = "general", use_mcp: bool = False) -> Any:
+    """按 (intent, use_mcp) 组合缓存已编译的图。"""
+    return build_agent(intent=intent, use_mcp=use_mcp)
 ```
 
 **验证方法：**
@@ -416,12 +408,12 @@ def get_agent(intent: str = "general"):
 知识库尚未建立，请先运行 python scripts/build_kb.py 建库
 ```
 
-**原因：** `rag.py` 在模块加载时初始化 ChromaDB 连接，如果服务启动时知识库为空，后续 `build_kb.py` 写入的数据不会自动刷新缓存。
+**原因：** `rag.py` 的 Chroma collection 是进程内单例（`lru_cache`）。服务启动时集合为空，之后 `build_kb.py` 在另一个进程写入的数据，这个进程不会再读到。
 
 **解决：**
 ```bash
 # 正确顺序
-docker compose up -d postgres chroma      # 1. 启动数据库
+docker compose up -d postgres             # 1. 启动数据库（ChromaDB 内嵌，无独立容器）
 python scripts/seed_data.py               # 2. 灌入订单数据
 python scripts/build_kb.py                # 3. 构建向量知识库
 python -m uvicorn src.api.app:app --reload --port 8080   # 4. 启动服务

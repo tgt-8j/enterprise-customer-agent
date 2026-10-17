@@ -16,9 +16,9 @@
 ```bash
 # 1. 拷贝环境变量模板
 cp .env.example .env
-# 编辑 .env，填入 LLM_API_KEY、JWT_SECRET_KEY 等必要字段
+# 编辑 .env，填入 LLM_API_KEY（以及 EMBEDDING_API_KEY，若非同一家服务）
 
-# 2. 启动所有服务（postgres + chroma + app）
+# 2. 启动所有服务（postgres + app；ChromaDB 内嵌在 app 进程里，没有独立容器）
 docker compose up -d
 
 # 3. 初始化知识库和示例数据（首次启动需要）
@@ -26,27 +26,29 @@ docker compose exec app python scripts/build_kb.py
 docker compose exec app python scripts/seed_data.py
 
 # 4. 打开前端页面
-open http://localhost:8000/demo/index.html
+open http://localhost:8080/demo/index.html
 ```
 
 ### 服务端口
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| API | 8000 | FastAPI，含 `/chat`、`/health`、`/metrics` |
+| API | 8080 → 容器 8000 | FastAPI，含 `/chat`、`/health`、`/metrics`（`APP_PORT` 可改） |
 | PostgreSQL | 5432 | 订单、工单、会话历史 |
-| ChromaDB | 8001 | 知识库向量存储 |
+| mcp_server | 8001 | 仅 `--profile mcp` 时启动；未接入对话主链路 |
+
+知识库向量存储在 app 容器内的 `/opt/app/chroma_db`，由 `chroma_app_data` 卷持久化，不对宿主机暴露端口。
 
 ### 验证安装
 
 ```bash
 # 健康检查
-curl http://localhost:8000/health
+curl http://localhost:8080/health
 
-# 快速对话测试
-curl -X POST http://localhost:8000/chat \
+# 快速对话测试（/chat 需要 JWT，先注册拿 token）
+curl -X POST http://localhost:8080/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"message":"帮我查一下订单12345"}'
+  -d '{"email":"a@b.com","password":"pass123456","name":"demo"}'
 ```
 
 ---
@@ -94,12 +96,13 @@ JWT_SECRET_KEY=<随机32位以上字符串>
 DATABASE_URL=postgresql+asyncpg://default:xxx@xxx.render.com:5432/agent_demo
 ```
 
-**5. ChromaDB 配置**
+**5. 向量库（ChromaDB）**
 
-Render Free 实例没有持久化卷，每次重启数据会丢失。
-如果不需要持久化知识库，可以跳过；否则建议使用 **Fly.io** 或自建 ChromaDB 实例。
+ChromaDB 是内嵌的，数据落在容器的 `/opt/app/chroma_db`。Render Free 没有持久化卷，容器重启后向量库会丢。
 
-临时方案（不推荐生产用）：在 `build` 命令里每次都重建知识库。
+- 不追求持久化：把 `python scripts/build_kb.py` 加进启动命令，每次启动重建（约几十秒，13 篇文档）；
+- 要持久化：给服务挂一个 Disk，并把 `CHROMA_PATH` 指向挂载点（如 `/data/chroma_db`）；
+- 也可以换外置向量库，但那需要改 `src/retrieval/rag.py`，本项目没做这层抽象。
 
 **6. 部署**
 
