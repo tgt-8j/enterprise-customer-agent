@@ -424,11 +424,11 @@ def get_agent(intent: str = "general"):
 docker compose up -d postgres chroma      # 1. 启动数据库
 python scripts/seed_data.py               # 2. 灌入订单数据
 python scripts/build_kb.py                # 3. 构建向量知识库
-python -m uvicorn main:app --reload --port 8080   # 4. 启动服务
+python -m uvicorn src.api.app:app --reload --port 8080   # 4. 启动服务
 
 # 如果顺序错了，重启服务即可
 taskkill /F /PID <uvicorn PID>
-python -m uvicorn main:app --reload --port 8080
+python -m uvicorn src.api.app:app --reload --port 8080
 ```
 
 ---

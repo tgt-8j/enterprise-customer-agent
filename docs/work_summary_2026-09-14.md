@@ -178,7 +178,7 @@ python scripts/seed_data.py
 python scripts/build_kb.py
 
 # 4. 启动 FastAPI 服务
-python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 验证命令

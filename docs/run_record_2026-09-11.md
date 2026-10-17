@@ -44,7 +44,7 @@ failed to resolve reference "docker.io/chromadb/chroma:latest": 403 Forbidden
 
 **解决**：改用 8001 端口启动服务：
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8001
+uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8001
 ```
 
 ---
@@ -96,7 +96,7 @@ python scripts/check.py
 #   26 passed, 24 skipped in 4.53s
 
 # 6. 启动服务（端口8001，避开Docker占用的8000）
-uvicorn main:app --reload --host 0.0.0.0 --port 8001
+uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8001
 ```
 
 ---

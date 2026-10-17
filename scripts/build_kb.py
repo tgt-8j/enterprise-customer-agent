@@ -13,7 +13,7 @@ import sys
 # 让脚本能从项目根目录 import rag（脚本不在根目录，需要手动加 path）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rag import build_knowledge_base  # noqa: E402
+from src.retrieval.rag import build_knowledge_base  # noqa: E402
 
 
 def main():

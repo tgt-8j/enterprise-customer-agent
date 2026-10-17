@@ -69,7 +69,7 @@ Render 提供免费的 PostgreSQL 实例，适合个人项目展示。
 | 配置项 | 值 |
 |--------|------|
 | Build Command | `pip install -r requirements.txt && python scripts/build_kb.py` |
-| Start Command | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
+| Start Command | `uvicorn src.api.app:app --host 0.0.0.0 --port $PORT` |
 | Instance Type | Free |
 
 **3. 配置环境变量**（Environment Variables）
@@ -139,7 +139,7 @@ PYTHON_ENV=prod
 **4. 设置启动命令**
 
 ```
-uvicorn main:app --host 0.0.0.0 --port $PORT
+uvicorn src.api.app:app --host 0.0.0.0 --port $PORT
 ```
 
 **5. 手动运行建库脚本（首次部署后）**

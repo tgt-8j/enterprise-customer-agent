@@ -18,7 +18,7 @@ class TestChunkText:
 
     def test_short_text_single_chunk(self):
         """短文本不切分。"""
-        from rag import chunk_text
+        from src.retrieval.rag import chunk_text
 
         chunks = chunk_text("这是一段短文本", chunk_size=100)
         assert len(chunks) == 1
@@ -26,7 +26,7 @@ class TestChunkText:
 
     def test_long_text_splits(self):
         """长文本按 chunk_size 切分。"""
-        from rag import chunk_text
+        from src.retrieval.rag import chunk_text
 
         text = "段落一。\n\n段落二。\n\n段落三。" * 10
         chunks = chunk_text(text, chunk_size=20, overlap=5)
@@ -37,7 +37,7 @@ class TestChunkText:
 
     def test_paragraph_aware_splitting(self):
         """按段落边界切分，不破坏语义。"""
-        from rag import chunk_text
+        from src.retrieval.rag import chunk_text
 
         text = "第一段内容。\n\n第二段内容。\n\n第三段内容。"
         chunks = chunk_text(text, chunk_size=50)
@@ -46,7 +46,7 @@ class TestChunkText:
 
     def test_overlap_conservation(self):
         """重叠部分正确保留。"""
-        from rag import chunk_text
+        from src.retrieval.rag import chunk_text
 
         text = "A B C D E F G H I J"
         chunks = chunk_text(text, chunk_size=10, overlap=3)
@@ -63,16 +63,16 @@ class TestEmbedTexts:
     @pytest.mark.asyncio
     async def test_embed_texts_mocked(self):
         """mock httpx 验证请求参数正确。"""
-        from rag import embed_texts
+        from src.retrieval.rag import embed_texts
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 10}]}
 
         with (
-            patch("rag.EMBEDDING_BASE_URL", "http://test"),
-            patch("rag.EMBEDDING_API_KEY", "test_key"),
-            patch("rag.EMBEDDING_MODEL_NAME", "embedding-3"),
+            patch("src.retrieval.rag.EMBEDDING_BASE_URL", "http://test"),
+            patch("src.retrieval.rag.EMBEDDING_API_KEY", "test_key"),
+            patch("src.retrieval.rag.EMBEDDING_MODEL_NAME", "embedding-3"),
         ):
             with patch("httpx.post", return_value=mock_response) as mock_post:
                 vectors = embed_texts(["test"])
@@ -85,9 +85,12 @@ class TestEmbedTexts:
 
     def test_embed_texts_missing_config(self):
         """缺少配置时抛出 RuntimeError。"""
-        from rag import embed_texts
+        from src.retrieval.rag import embed_texts
 
-        with patch("rag.EMBEDDING_BASE_URL", ""), patch("rag.EMBEDDING_API_KEY", ""):
+        with (
+            patch("src.retrieval.rag.EMBEDDING_BASE_URL", ""),
+            patch("src.retrieval.rag.EMBEDDING_API_KEY", ""),
+        ):
             with pytest.raises(RuntimeError, match="缺少 embedding 配置"):
                 embed_texts(["test"])
 
@@ -97,9 +100,9 @@ class TestSearch:
 
     def test_search_empty_collection(self):
         """空知识库返回建库提示。"""
-        from rag import search
+        from src.retrieval.rag import search
 
-        with patch("rag.get_collection") as mock_get:
+        with patch("src.retrieval.rag.get_collection") as mock_get:
             mock_coll = MagicMock()
             mock_coll.count.return_value = 0
             mock_get.return_value = mock_coll
@@ -109,9 +112,9 @@ class TestSearch:
 
     def test_search_no_hits_above_threshold(self):
         """所有结果相似度低于阈值时返回未找到。"""
-        from rag import search
+        from src.retrieval.rag import search
 
-        with patch("rag.get_collection") as mock_get:
+        with patch("src.retrieval.rag.get_collection") as mock_get:
             mock_coll = MagicMock()
             mock_coll.count.return_value = 1
             mock_get.return_value = mock_coll
@@ -123,15 +126,15 @@ class TestSearch:
                 "distances": [[1.0]],  # similarity = 1-1.0 = 0.0 < 0.25
             }
 
-            with patch("rag.embed_texts", return_value=[[0.1] * 10]):
+            with patch("src.retrieval.rag.embed_texts", return_value=[[0.1] * 10]):
                 result = search("test query")
                 assert "未找到" in result
 
     def test_search_with_hits(self):
         """有匹配结果时返回格式化文本。"""
-        from rag import search
+        from src.retrieval.rag import search
 
-        with patch("rag.get_collection") as mock_get:
+        with patch("src.retrieval.rag.get_collection") as mock_get:
             mock_coll = MagicMock()
             mock_coll.count.return_value = 1
             mock_get.return_value = mock_coll
@@ -142,15 +145,15 @@ class TestSearch:
                 "distances": [[0.1]],  # similarity = 0.9 > 0.25
             }
 
-            with patch("rag.embed_texts", return_value=[[0.1] * 10]):
+            with patch("src.retrieval.rag.embed_texts", return_value=[[0.1] * 10]):
                 result = search("退货政策")
                 assert "退货政策" in result
                 assert "01-退货政策总则" in result
 
     def test_search_exception_fallback(self):
         """检索异常时返回降级文本。"""
-        from rag import search
+        from src.retrieval.rag import search
 
-        with patch("rag.get_collection", side_effect=Exception("test error")):
+        with patch("src.retrieval.rag.get_collection", side_effect=Exception("test error")):
             result = search("test")
             assert "检索失败" in result

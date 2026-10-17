@@ -7,8 +7,8 @@ CI 环境会通过 GitHub Actions service 容器自动提供 PostgreSQL。
 
 import pytest
 
-import db
-from auth import hash_password
+import src.persistence.db as db
+from src.auth.auth import hash_password
 
 
 def _skip_if_no_db():
@@ -152,6 +152,37 @@ class TestHistoryWindow:
 
             rows = await db.load_history(session_id)
             assert len(rows) == 0
+        finally:
+            await db.clear_session(session_id)
+
+    @pytest.mark.asyncio
+    async def test_load_history_paged(self, db_session):
+        """#Medium：分页读取历史 + 总数。"""
+        import uuid
+
+        session_id = f"test-paged-{uuid.uuid4().hex[:8]}"
+        try:
+            for k in range(7):
+                await db.save_message(session_id, "user", f"m{k}")
+            page1, total = await db.load_history_paged(session_id, page=1, size=3)
+            assert total == 7
+            assert [r.content for r in page1] == ["m0", "m1", "m2"]
+            page3, _ = await db.load_history_paged(session_id, page=3, size=3)
+            assert [r.content for r in page3] == ["m6"]
+            over, _ = await db.load_history_paged(session_id, page=99, size=3)
+            assert over == []
+        finally:
+            await db.clear_session(session_id)
+
+    @pytest.mark.asyncio
+    async def test_count_history(self, db_session):
+        import uuid
+
+        session_id = f"test-count-{uuid.uuid4().hex[:8]}"
+        try:
+            await db.save_message(session_id, "user", "a")
+            await db.save_message(session_id, "assistant", "b")
+            assert await db.count_history(session_id) == 2
         finally:
             await db.clear_session(session_id)
 

@@ -1,4 +1,4 @@
-"""集中式配置管理（V7 企业级增强）。
+"""集中式配置管理。
 
 设计要点：
 - 用 pydantic Settings 做类型校验：启动时就把错配的环境变量拦下来，
@@ -7,7 +7,9 @@
   以后改配置只动一个文件。
 - PYTHON_ENV 控制环境模式（dev / staging / prod），默认 dev。
   不同环境的差异通过继承 BaseSettings 实现，不用写 if/else 判断。
-- JWT_SECRET_KEY 等敏感字段在 .env 缺失时给出明确提示，而不是静默使用空值。
+- JWT_SECRET_KEY 等敏感字段：prod 缺失时 fail-fast 拒绝启动（见
+  _resolve_jwt_secret），dev/staging 未配置则回退到进程内随机密钥并打
+  warning，任何环境都不落公开常量。
 """
 
 import os
@@ -18,9 +20,59 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
-def _gen_fallback_secret() -> str:
-    """开发环境兜底密钥：实际使用时必须替换为强随机密钥。"""
-    return "dev-fallback-secret-key-do-not-use-in-production-at-least-32-chars"
+def _resolve_jwt_secret() -> str:
+    """解析 JWT 密钥，未配置时按环境 fail-fast。
+
+    设计：
+    - 密钥是 HS256 对称密钥，一旦公开即可伪造任意用户 token。
+      绝不能在任何环境"静默"退回到公开的固定字符串。
+    - dev / staging：允许未配置，但生成一个进程内强随机密钥并打 warning。
+      代价是进程重启后 token 全部失效（对开发/预发可接受），换来"不暴露
+      公开密钥"的安全底线。
+    - prod：必须显式配置 JWT_SECRET_KEY，否则直接抛错，拒绝启动。
+    """
+    env = os.getenv("PYTHON_ENV", "dev").lower()
+    configured = os.getenv("JWT_SECRET_KEY", "").strip()
+    if configured and len(configured) >= 32:
+        return configured
+
+    # 环境感知：dev/staging 允许进程内随机兜底；prod 必须显式配置密钥，
+    # 否则 fail-fast 拒绝启动。
+    if env == "prod":
+        raise RuntimeError(
+            "JWT_SECRET_KEY 未配置或长度不足 32：生产环境必须显式设置强随机密钥"
+            '（python -c "import secrets; print(secrets.token_hex(32))"）。'
+            "为避免公开密钥可被用于伪造任意用户 token，进程拒绝启动。"
+        )
+
+    # dev / staging 兜底：不落公开常量，生成进程内随机密钥
+    import logging
+    import secrets
+
+    logging.getLogger(__name__).warning(
+        "JWT_SECRET_KEY 未配置（%s 环境）：已生成本进程随机密钥作为兜底，"
+        "进程重启后所有 token 将失效。部署前请显式设置 JWT_SECRET_KEY。",
+        env,
+    )
+    return "dev-" + secrets.token_hex(32)
+
+    if env == "prod":
+        raise RuntimeError(
+            "JWT_SECRET_KEY 未配置或长度不足 32：生产环境必须显式设置强随机密钥"
+            '（python -c "import secrets; print(secrets.token_hex(32))"）。'
+            "为避免公开密钥可被用于伪造任意用户 token，进程拒绝启动。"
+        )
+
+    # dev / staging：不落到公开常量，生成进程内随机密钥
+    import logging
+    import secrets
+
+    logging.getLogger(__name__).warning(
+        "JWT_SECRET_KEY 未配置（%s 环境）：已生成本进程随机密钥作为兜底，"
+        "进程重启后所有 token 将失效。部署前请显式设置 JWT_SECRET_KEY。",
+        env,
+    )
+    return "dev-" + secrets.token_hex(32)
 
 
 class BaseConfig(BaseSettings):
@@ -29,7 +81,7 @@ class BaseConfig(BaseSettings):
     """
 
     # ---------- 应用基本信息 ----------
-    app_name: str = "企业客服Agent V7"
+    app_name: str = "企业客服Agent"
     app_env: Literal["dev", "staging", "prod"] = "dev"
     debug: bool = False
     log_level: str = "info"
@@ -71,10 +123,14 @@ class BaseConfig(BaseSettings):
         default="chroma_db", description="ChromaDB database persistence directory"
     )
     # ---------- JWT 认证 ----------
-    # 注意：这里不强制 min_length，因为开发环境可能还没有 .env 文件。
-    # 实际使用时会在 auth.py 中检查密钥是否有效。
+    # 密钥解析逻辑集中在 _resolve_jwt_secret()：
+    # - 已配置且 >=32 位 → 直接采用
+    # - 未配置且非 prod  → 进程内随机密钥 + warning（重启即失效，安全兜底）
+    # - 未配置且 prod    → 抛错，拒绝启动
+    # 这里不能给一个公开的固定默认值，否则等同于"公开密钥"。
     jwt_secret_key: str = Field(
-        default=_gen_fallback_secret(), description="JWT 签名密钥，至少 32 位"
+        default_factory=_resolve_jwt_secret,
+        description="JWT 签名密钥，至少 32 位",
     )
     jwt_algorithm: str = Field(default="HS256", description="JWT 签名算法")
     access_token_expire_minutes: int = Field(default=15, ge=1, le=1440)

@@ -12,8 +12,8 @@ from pathlib import Path
 # 确保项目根目录在 PYTHONPATH 中（scripts/ 不在根目录）
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from constraints.auto_fixer import AutoFixer
-from constraints.validator import ConstraintValidator
+from src.constraints.auto_fixer import AutoFixer
+from src.constraints.validator import ConstraintValidator
 
 
 def section(title: str):

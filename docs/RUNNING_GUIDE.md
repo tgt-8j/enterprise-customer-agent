@@ -86,7 +86,7 @@ python scripts/build_kb.py
 ```bash
 python scripts/start.sh
 # 或
-uvicorn main:app --reload --port 8080
+uvicorn src.api.app:app --reload --port 8080
 ```
 
 ### 步骤 6: 访问服务

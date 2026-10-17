@@ -87,8 +87,9 @@ class AutoFixer:
         ticket_id = context.get("ticket_id", "")
         if not ticket_id:
             return output
-        # 避免重复追加
-        if re.search(r"TC\d{6,12}", output):
+        # 避免重复追加：既匹配 TC 前缀工单号，也匹配纯数字工单号
+        # （create_ticket 返回自增 int，历史/外部系统可能用 TC 前缀）
+        if re.search(r"(?:TC\d{6,12}|\d{1,20})", output):
             return output
         suffix = f"\n\n【工单信息】您的工单号：{ticket_id}，我们将在 24 小时内处理并短信通知您。"
         logger.debug("自动添加工单号: %s", ticket_id)

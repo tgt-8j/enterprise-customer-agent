@@ -112,6 +112,18 @@
     }
     .msg .trace .tool-start { color: #f59e0b; }
     .msg .trace .tool-end { color: #10b981; }
+    .msg .trace .tool-start code { color: #f59e0b; }
+    .msg .trace .tool-end code { color: #10b981; }
+    .intent-tag {
+      display: inline-block;
+      font-size: 11px;
+      background: var(--primary-light);
+      color: var(--primary);
+      padding: 1px 8px;
+      border-radius: 10px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
     .typing {
       align-self: flex-start;
       padding: 10px 14px;
@@ -353,7 +365,7 @@ async function sendMessageBlock(text) {
   }
   const data = await res.json();
   sessionId = data.session_id;
-  appendMsg('agent', data.reply, data.tool_calls || []);
+  appendMsg('agent', data.reply, data.tool_calls || [], data.intent);
 }
 
 async function sendMessageStream(text) {
@@ -418,6 +430,7 @@ async function sendMessageStream(text) {
           } else if (event.type === 'done') {
             sessionId = event.data.session_id;
             toolCalls = event.data.tool_calls || [];
+            const intent = event.data.intent;
             // 移除光标
             const content = msgDiv.querySelector('.content');
             if (content) content.textContent = buffer;
@@ -429,8 +442,18 @@ async function sendMessageStream(text) {
                 `<div><code>${escapeHtml(t.tool_name)}</code>(${escapeHtml(JSON.stringify(t.tool_input || {}).slice(0, 60))}) → ${escapeHtml((t.tool_output || '').slice(0, 100))}</div>`
               ).join('');
             }
+            if (intent) {
+              const meta = msgDiv.querySelector('.meta');
+              if (meta) meta.textContent = 'Agent · 意图: ' + intent + ' · ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            }
           } else if (event.type === 'error') {
-            throw new Error(event.data);
+            const contentEl = msgDiv.querySelector('.content');
+            if (contentEl) {
+              contentEl.textContent = (buffer ? buffer + '\n\n' : '') + '❌ 服务异常：' + event.data;
+              contentEl.classList.remove('cursor');
+            }
+            setStatus('⚠️ 流式响应出错：' + event.data, 'error');
+            break;
           }
         } catch (e) {
           console.error('SSE parse error:', e);
@@ -467,7 +490,7 @@ function sendPrompt(text) {
   sendMessage();
 }
 
-function appendMsg(role, content, toolCalls) {
+function appendMsg(role, content, toolCalls, intent) {
   const container = document.getElementById('chat-container');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
@@ -480,8 +503,9 @@ function appendMsg(role, content, toolCalls) {
     }).join('');
     traceHtml = '<div class="trace">' + lines + '</div>';
   }
+  const intentHtml = intent ? '<span class="intent-tag">' + escapeHtml(intent) + '</span>' : '';
   div.innerHTML = escapeHtml(content) + traceHtml +
-    '<div class="meta">' + (role === 'user' ? '你' : 'Agent') + ' · ' +
+    '<div class="meta">' + (role === 'user' ? '你' : 'Agent') + intentHtml + ' · ' +
     new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + '</div>';
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;

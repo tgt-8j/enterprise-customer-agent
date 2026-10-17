@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import db
-import rag
-from tools import ALL_TOOLS, create_ticket, query_order, search_knowledge
+import src.persistence.db as db
+import src.retrieval.rag as rag
+from src.graph.nodes.tools import ALL_TOOLS, create_ticket, query_order, search_knowledge
 
 
 class TestQueryOrder:

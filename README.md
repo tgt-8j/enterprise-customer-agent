@@ -3,7 +3,7 @@
 > 基于 LangGraph + RAG 的企业客服 Agent，支持订单查询、知识库检索和工单创建。手写 LangGraph 工作流实现 ReAct 循环，测试全部通过。
 
 ```
-47 tests passing   ·   65.8% coverage   ·   Python 3.12
+232 tests collected · Python 3.12
 ```
 
 ## 场景演示
@@ -40,7 +40,7 @@ docker compose up -d postgres chroma
 # 4. 建库灌数并启动服务
 python scripts/seed_data.py
 python scripts/build_kb.py
-python -m uvicorn main:app --reload --port 8080
+python -m uvicorn src.api.app:app --reload --port 8080
 ```
 
 访问 **http://localhost:8080/demo/index.html** 体验对话。
@@ -140,10 +140,10 @@ MCP 模式下，三个工具通过标准 MCP 协议暴露为独立服务（`mcp_
 ## 测试与评测
 
 ```bash
-# 单元测试（100+个，全部通过）
+# 单元测试（232 个，全部通过）
 pytest tests/ -v
 
-# AI 行为评测（26个场景化用例）
+# AI 行为评测（26 个场景化用例）
 python evals/run_eval.py
 ```
 
@@ -153,37 +153,40 @@ python evals/run_eval.py
 
 ```
 enterprise-customer-agent/
-├── main.py              # FastAPI 应用（端点、中间件、指标）
-├── agent.py             # LangGraph ReAct Agent 构建
-├── auth.py              # JWT 认证（access/refresh token）
-├── config.py            # 集中式配置管理
-├── db.py                # PostgreSQL 异步模型与操作
-├── dispatch.py          # 意图分发（关键词规则匹配）
-├── llm.py               # LLM 客户端（DashScope/Qwen）
-├── rag.py               # RAG 检索（Embedding + ChromaDB + Circuit Breaker）
-├── tools.py             # 工具定义（@tool 装饰器）
-├── metrics.py           # Prometheus 指标
-├── logging_config.py    # JSON 结构化日志
-├── constraints/         # 约束验证模块（YAML 规则 + Validator + AutoFixer）
-│   ├── constraints.yaml # 工具白名单、禁止行为、输出约束定义
-│   ├── validator.py     # ConstraintValidator（运行时违规检测）
-│   └── auto_fixer.py    # AutoFixer（工单号补全、截断、语气软化）
-├── metrics.py           # Prometheus 指标
-├── logging_config.py    # JSON 结构化日志
+├── src/                 # 分层源码（按职责拆分模块）
+│   ├── api/             # FastAPI 应用（端点、中间件、指标）
+│   │   ├── app.py
+│   │   ├── routers/
+│   │   └── schemas/
+│   ├── auth/            # JWT 认证（access/refresh token）
+│   ├── config/          # 集中式配置管理
+│   ├── persistence/     # PostgreSQL 异步模型与操作
+│   ├── dispatch/        # 意图分发（关键词规则匹配）
+│   ├── llm/             # LLM 客户端（DashScope/Qwen）
+│   ├── retrieval/       # RAG 检索（Embedding + ChromaDB + BM25 + Reranker + Circuit Breaker）
+│   ├── graph/           # LangGraph ReAct Agent（手写 StateGraph）
+│   │   ├── graph.py
+│   │   └── nodes/tools.py    # 工具定义（@tool 装饰器）
+│   ├── constraints/     # 约束验证模块（YAML 规则 + Validator + AutoFixer）
+│   │   ├── constraints.yaml
+│   │   ├── validator.py
+│   │   └── auto_fixer.py
+│   ├── mcp_server/      # MCP 工具服务（可选）
+│   │   └── server.py
+│   ├── metrics/         # Prometheus 指标
+│   └── logging_config.py  # JSON 结构化日志
 ├── docker-compose.yml   # 容器编排（app/postgres/chroma/mcp_server）
 ├── Dockerfile
-├── .env                 # 环境变量配置
-│
-├── mcp_server/          # MCP 工具服务（可选）
-│   └── server.py        # FastMCP server
+├── .env.example         # 环境变量配置模板（.env 已 gitignore，勿提交真实 key）
 │
 ├── scripts/
 │   ├── seed_data.py     # 灌入模拟订单数据
 │   ├── build_kb.py      # 构建向量知识库
 │   ├── verify.py        # 冒烟测试
-│   └── verify_mcp.py    # MCP 专项验证
+│   ├── verify_mcp.py    # MCP 专项验证
+│   └── verify_constraints.py  # 约束验证演示
 │
-├── tests/               # 47 个单元测试
+├── tests/               # 单元测试（共 232 个，全部通过）
 │   ├── test_fastapi.py  # FastAPI 层测试
 │   ├── test_agent_legacy.py  # Agent ReAct 循环
 │   ├── test_dispatch.py # 意图分发
@@ -191,7 +194,11 @@ enterprise-customer-agent/
 │   ├── test_tools.py    # 工具逻辑
 │   └── test_stream.py   # SSE 流式
 │
-├── knowledge/           # 知识库 Markdown 文档（13个）
+├── evals/               # AI 行为评测（26 个场景化用例）
+│   ├── cases.json
+│   └── run_eval.py
+│
+├── knowledge/           # 知识库 Markdown 文档（13 个）
 │   ├── 01-退货政策总则.md
 │   ├── 02-七天无理由退货.md
 │   └── ...

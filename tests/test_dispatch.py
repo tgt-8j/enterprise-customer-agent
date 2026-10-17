@@ -2,7 +2,7 @@
 
 import pytest
 
-from dispatch import DispatchDecision, classify_intent
+from src.dispatch.dispatch import DispatchDecision, classify_intent
 
 
 @pytest.mark.asyncio
@@ -44,6 +44,26 @@ async def test_classify_chitchat():
     decision = await classify_intent("你好，早上好")
     assert decision.intent == "chitchat"
     assert decision.confidence == 0.5
+
+
+@pytest.mark.asyncio
+async def test_chitchat_downgrade_triggers_llm_branch(monkeypatch):
+    """修复 #dispatch 乱码死分支后：关键词落到"无匹配关键词"降级分支时，
+    确实会升级调用 LLM（此前 chr(0x914) 写错码位导致该判断恒为 False，
+    LLM 兜底几乎不触发）。这里把 _classify_by_llm 打桩，断言它被调用了。
+    """
+    import src.dispatch.dispatch as d
+
+    called = {"n": 0}
+
+    async def fake_llm(query):
+        called["n"] += 1
+        return DispatchDecision(intent="chitchat", confidence=0.5, reasoning="llm")
+
+    monkeypatch.setattr(d, "_classify_by_llm", fake_llm)
+    # "你好" 不含任何业务关键词 → 关键词分支落到 chitchat 降级（reasoning 含"无匹配关键词"）
+    await classify_intent("你好")
+    assert called["n"] >= 1
 
 
 @pytest.mark.asyncio

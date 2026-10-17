@@ -35,7 +35,7 @@ python scripts/seed_data.py
 python scripts/build_kb.py
 
 # 3. 启动 FastAPI 服务（两个终端，先启这个）
-python -m uvicorn main:app --reload --port 8080
+python -m uvicorn src.api.app:app --reload --port 8080
 ```
 
 > ⚠️ **重要：必须先建库再启动服务。** 如果服务已启动后再建库，需重启服务（`taskkill /F /PID <uvicorn PID>` 再重新运行 uvicorn）。
@@ -105,7 +105,7 @@ curl -s "http://localhost:8080/dispatch?query=退货政策是什么" \
 python scripts/build_kb.py --rebuild
 # 重启 uvicorn
 taskkill /F /PID <uvicorn PID>
-python -m uvicorn main:app --reload --port 8080
+python -m uvicorn src.api.app:app --reload --port 8080
 ```
 
 ### Q2: Docker 容器 unhealthy

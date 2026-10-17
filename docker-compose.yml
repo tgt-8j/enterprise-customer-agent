@@ -1,15 +1,14 @@
 # 本地开发 & 预发布部署（docker-compose）
 #
-# 三个服务（默认模式）：
-#   app      - AI Agent 主服务
+# 两个服务（默认模式）：
+#   app      - AI Agent 主服务（RAG 用内嵌 ChromaDB + 持久化卷，无需独立 Chroma 容器）
 #   postgres - PostgreSQL 数据库
-#   chroma   - ChromaDB 向量数据库
 #
-# 四个服务（MCP 模式）：
+# 三个服务（MCP 模式）：
 #   mcp_server - 独立工具服务，通过 MCP 协议暴露 query_order / search_knowledge / create_ticket
 #
 # 启动（默认模式）：docker compose up -d
-# 启动（MCP 模式）：MCP_ENABLED=true docker compose up -d
+# 启动（MCP 模式）：docker compose --profile mcp up -d
 # 停止：docker compose down
 # 重建：docker compose up -d --build
 
@@ -26,17 +25,16 @@ services:
       - PYTHON_ENV=${PYTHON_ENV:-dev}
       # PostgreSQL 连接走容器网络，主机名是 postgres
       - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-agent_demo}
-      # ChromaDB 用持久化卷，数据在容器重启后保留
-      - CHROMA_DIR=/opt/app/chroma_db
+      # ChromaDB 存储路径（变量名必须与 settings.chroma_path 一致，否则会被忽略）
+      # 用持久化卷，数据在容器重启后保留，不必每次重建知识库
+      - CHROMA_PATH=/opt/app/chroma_db
       # MCP 模式开关（可选）
       - USE_MCP=${USE_MCP:-false}
-      # MCP Server 地址（容器网络）
-      - MCP_SERVER_URL=http://mcp_server:8001
+      # MCP Server 地址（容器网络，streamable-http 的端点是 /mcp）
+      - MCP_SERVER_URL=http://mcp_server:8001/mcp
     depends_on:
       postgres:
         condition: service_healthy
-      chroma:
-        condition: service_started
       mcp_server:
         condition: service_started
         required: false
@@ -49,6 +47,8 @@ services:
     volumes:
       # 挂载 knowledge/ 目录，修改文档后无需重建镜像
       - ./knowledge:/opt/app/knowledge:ro
+      # 向量库持久化到宿主机卷，容器重启/重建都不丢
+      - chroma_app_data:/opt/app/chroma_db
       # 日志持久化到宿主机
       - app_logs:/opt/app/logs
     networks:
@@ -72,14 +72,7 @@ services:
     networks:
       - agent-net
 
-  chroma:
-    image: chromadb/chroma:latest
-    volumes:
-      - chroma_data:/chroma/chroma
-    networks:
-      - agent-net
-
-  # MCP 工具服务（可选，USE_MCP=true 时启用）
+  # MCP 工具服务（可选，--profile mcp 时启用）
   # 将三个客服工具暴露为独立服务，支持跨进程调用和多客户端共享
   mcp_server:
     profiles:
@@ -87,12 +80,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m mcp_server.server
+    command: python -m src.mcp_server.server
     ports:
       - "8001:8001"
     environment:
       - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-agent_demo}
-      - CHROMA_DIR=/opt/app/chroma_db
+      - CHROMA_PATH=/opt/app/chroma_db
+    volumes:
+      - ./knowledge:/opt/app/knowledge:ro
+      - chroma_app_data:/opt/app/chroma_db
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,7 +97,7 @@ services:
 
 volumes:
   postgres_data:
-  chroma_data:
+  chroma_app_data:
   app_logs:
 
 networks:

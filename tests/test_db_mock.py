@@ -6,12 +6,13 @@
 - get_user_by_email / create_user / load_history / save_message / clear_session 的 mock 验证
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import db
-from db import ChatMessage
+import src.persistence.db as db
+from src.persistence.db import ChatMessage
 
 
 # ──────────────────────────────────────────────
@@ -31,7 +32,7 @@ class TestSessionScope:
         mock_factory.__aenter__ = AsyncMock(return_value=mock_session)
         mock_factory.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("db.AsyncSessionLocal", return_value=mock_factory):
+        with patch("src.persistence.db.AsyncSessionLocal", return_value=mock_factory):
             with pytest.raises(Exception, match="boom"):
                 async with db.session_scope():
                     pass
@@ -50,7 +51,7 @@ class TestSessionScope:
         mock_factory.__aenter__ = AsyncMock(return_value=mock_session)
         mock_factory.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("db.AsyncSessionLocal", return_value=mock_factory):
+        with patch("src.persistence.db.AsyncSessionLocal", return_value=mock_factory):
             async with db.session_scope():
                 pass
 
@@ -66,8 +67,9 @@ class TestEnsureTables:
 
     @pytest.mark.asyncio
     async def test_ensure_tables_sets_flag(self):
-        original = db._tables_ready
-        db._tables_ready = False
+        # 重置幂等标志 + 把锁也重置（惰性锁，跨事件循环安全）
+        db.reset_tables_ready()
+        db._tables_lock = None
         try:
             mock_conn = MagicMock()
 
@@ -90,20 +92,32 @@ class TestEnsureTables:
             assert db._tables_ready is True
             mock_engine.begin.assert_called_once()
         finally:
-            db._tables_ready = original
+            db.reset_tables_ready()
+            db._tables_lock = None
 
     @pytest.mark.asyncio
     async def test_ensure_tables_skip_when_ready(self):
         """第二次调用时，因为 _tables_ready=True，应跳过建表。"""
-        original = db._tables_ready
         db._tables_ready = True
+        db._tables_lock = None
         try:
             mock_engine = MagicMock()
             with patch.object(db, "engine", mock_engine):
                 await db.ensure_tables()
                 mock_engine.begin.assert_not_called()
         finally:
-            db._tables_ready = original
+            db._tables_ready = False
+            db._tables_lock = None
+
+    @pytest.mark.asyncio
+    async def test_lazy_lock_bound_to_running_loop(self):
+        """惰性锁：模块加载时 _tables_lock 是 None，首次调用时才 new。"""
+        assert db._tables_lock is None or isinstance(db._tables_lock, asyncio.Lock)
+        db._tables_lock = None
+        # 在运行中的事件循环里调用，应该创建出新的 Lock
+        lock = db._get_tables_lock()
+        assert isinstance(lock, asyncio.Lock)
+        assert db._tables_lock is lock
 
 
 # ──────────────────────────────────────────────
@@ -122,7 +136,7 @@ class TestGetUserByEmail:
         mock_session_factory.__aexit__ = AsyncMock(return_value=None)
         mock_session_factory.execute = AsyncMock(return_value=mock_result)
 
-        with patch("db.AsyncSessionLocal", return_value=mock_session_factory):
+        with patch("src.persistence.db.AsyncSessionLocal", return_value=mock_session_factory):
             result = await db.get_user_by_email("test@example.com")
         assert result is mock_user
         mock_session_factory.execute.assert_called_once()
@@ -137,7 +151,7 @@ class TestGetUserByEmail:
         mock_session_factory.__aexit__ = AsyncMock(return_value=None)
         mock_session_factory.execute = AsyncMock(return_value=mock_result)
 
-        with patch("db.AsyncSessionLocal", return_value=mock_session_factory):
+        with patch("src.persistence.db.AsyncSessionLocal", return_value=mock_session_factory):
             result = await db.get_user_by_email("nobody@example.com")
         assert result is None
 
@@ -153,7 +167,7 @@ class TestCreateUser:
         mock_session.flush = AsyncMock()
         mock_session.refresh = AsyncMock()
 
-        with patch("db.session_scope") as mock_scope:
+        with patch("src.persistence.db.session_scope") as mock_scope:
             mock_scope.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_scope.return_value.__aexit__ = AsyncMock(return_value=None)
             await db.create_user(
@@ -183,7 +197,7 @@ class TestLoadHistory:
         mock_session_factory.__aexit__ = AsyncMock(return_value=None)
         mock_session_factory.execute = AsyncMock(return_value=mock_result)
 
-        with patch("db.AsyncSessionLocal", return_value=mock_session_factory):
+        with patch("src.persistence.db.AsyncSessionLocal", return_value=mock_session_factory):
             rows = await db.load_history("s1")
 
         assert len(rows) == 2
@@ -200,7 +214,7 @@ class TestLoadHistory:
         mock_session_factory.__aexit__ = AsyncMock(return_value=None)
         mock_session_factory.execute = AsyncMock(return_value=mock_result)
 
-        with patch("db.AsyncSessionLocal", return_value=mock_session_factory):
+        with patch("src.persistence.db.AsyncSessionLocal", return_value=mock_session_factory):
             await db.load_history("s1", limit=5)
 
         mock_session_factory.execute.assert_called_once()
@@ -216,7 +230,7 @@ class TestSaveMessage:
         mock_session.add = MagicMock()
         mock_session.commit = AsyncMock()
 
-        with patch("db.session_scope") as mock_scope:
+        with patch("src.persistence.db.session_scope") as mock_scope:
             mock_scope.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_scope.return_value.__aexit__ = AsyncMock(return_value=None)
             await db.save_message("s1", "user", "hello")
@@ -242,7 +256,7 @@ class TestClearSession:
         mock_session.execute = AsyncMock(return_value=mock_result)
         mock_session.commit = AsyncMock()
 
-        with patch("db.session_scope") as mock_scope:
+        with patch("src.persistence.db.session_scope") as mock_scope:
             mock_scope.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_scope.return_value.__aexit__ = AsyncMock(return_value=None)
             count = await db.clear_session("s1")

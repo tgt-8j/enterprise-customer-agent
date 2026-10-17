@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from auth import (
+from src.auth.auth import (
     _decode,
     blacklist_token,
     create_access_token,
@@ -127,7 +127,7 @@ class TestDecodeExceptions:
             "exp": datetime.now(UTC) - timedelta(hours=1),
         }
         expired = jwt.encode(payload, "test_secret_for_coverage", algorithm="HS256")
-        with patch("auth.settings.jwt_secret_key", "test_secret_for_coverage"):
+        with patch("src.auth.auth.settings.jwt_secret_key", "test_secret_for_coverage"):
             with pytest.raises(HTTPException) as exc_info:
                 _decode(expired)
             assert exc_info.value.status_code == 401
@@ -188,7 +188,7 @@ class TestGetCurrentUser:
     async def test_wrong_token_type_raises(self, fake_user):
         """type != 'access' → 401。"""
         creds = _make_creds("fake.token")
-        with patch("auth.decode_token", return_value=_make_payload(type="refresh")):
+        with patch("src.auth.auth.decode_token", return_value=_make_payload(type="refresh")):
             with pytest.raises(HTTPException) as exc_info:
                 await _get_current_user_orig(credentials=creds)
             assert exc_info.value.status_code == 401
@@ -198,19 +198,32 @@ class TestGetCurrentUser:
     async def test_missing_sub_raises(self, fake_user):
         """payload 缺少 sub 字段 → 401。"""
         creds = _make_creds("fake.token")
-        with patch("auth.decode_token", return_value={"type": "access"}):
+        with patch("src.auth.auth.decode_token", return_value={"type": "access"}):
             with pytest.raises(HTTPException) as exc_info:
                 await _get_current_user_orig(credentials=creds)
             assert exc_info.value.status_code == 401
             assert exc_info.value.detail == "令牌缺少用户标识"
 
     @pytest.mark.asyncio
+    async def test_malformed_sub_raises_401_not_500(self, fake_user):
+        """sub 非数字（畸形 token）→ 401，而不是 int() 崩溃成 500。"""
+        creds = _make_creds("fake.token")
+        with patch(
+            "src.auth.auth.decode_token",
+            return_value={"type": "access", "sub": "not-a-number"},
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_current_user_orig(credentials=creds)
+            assert exc_info.value.status_code == 401
+            assert "无效" in exc_info.value.detail
+
+    @pytest.mark.asyncio
     async def test_user_not_found_raises(self, fake_user):
         """数据库查不到用户 → 401。"""
         creds = _make_creds("fake.token")
         _, mock_session = _make_mock_session(user=None)
-        with patch("auth.decode_token", return_value=_make_payload()):
-            with patch("auth.db.AsyncSessionLocal", return_value=mock_session):
+        with patch("src.auth.auth.decode_token", return_value=_make_payload()):
+            with patch("src.auth.auth.db.AsyncSessionLocal", return_value=mock_session):
                 with pytest.raises(HTTPException) as exc_info:
                     await _get_current_user_orig(credentials=creds)
                 assert exc_info.value.status_code == 401
@@ -222,8 +235,8 @@ class TestGetCurrentUser:
         creds = _make_creds("fake.token")
         inactive = MagicMock(id=1, is_active=False)
         _, mock_session = _make_mock_session(user=inactive)
-        with patch("auth.decode_token", return_value=_make_payload()):
-            with patch("auth.db.AsyncSessionLocal", return_value=mock_session):
+        with patch("src.auth.auth.decode_token", return_value=_make_payload()):
+            with patch("src.auth.auth.db.AsyncSessionLocal", return_value=mock_session):
                 with pytest.raises(HTTPException) as exc_info:
                     await _get_current_user_orig(credentials=creds)
                 assert exc_info.value.status_code == 401
@@ -234,8 +247,8 @@ class TestGetCurrentUser:
         """正常流程返回 user 对象。"""
         creds = _make_creds("fake.token")
         _, mock_session = _make_mock_session(user=fake_user)
-        with patch("auth.decode_token", return_value=_make_payload()):
-            with patch("auth.db.AsyncSessionLocal", return_value=mock_session):
+        with patch("src.auth.auth.decode_token", return_value=_make_payload()):
+            with patch("src.auth.auth.db.AsyncSessionLocal", return_value=mock_session):
                 user = await _get_current_user_orig(credentials=creds)
                 assert user is fake_user
 
@@ -251,14 +264,14 @@ class TestGetOptionalUser:
     @pytest.mark.asyncio
     async def test_wrong_token_type_returns_none(self):
         creds = _make_creds("fake.token")
-        with patch("auth.decode_token", return_value=_make_payload(type="refresh")):
+        with patch("src.auth.auth.decode_token", return_value=_make_payload(type="refresh")):
             result = await _get_optional_user_orig(credentials=creds)
             assert result is None
 
     @pytest.mark.asyncio
     async def test_decode_exception_returns_none(self):
         creds = _make_creds("fake.token")
-        with patch("auth.decode_token", side_effect=HTTPException(status_code=401)):
+        with patch("src.auth.auth.decode_token", side_effect=HTTPException(status_code=401)):
             result = await _get_optional_user_orig(credentials=creds)
             assert result is None
 
@@ -267,8 +280,8 @@ class TestGetOptionalUser:
         fake_user = MagicMock(id=1)
         creds = _make_creds("fake.token")
         _, mock_session = _make_mock_session(user=fake_user)
-        with patch("auth.decode_token", return_value=_make_payload()):
-            with patch("auth.db.AsyncSessionLocal", return_value=mock_session):
+        with patch("src.auth.auth.decode_token", return_value=_make_payload()):
+            with patch("src.auth.auth.db.AsyncSessionLocal", return_value=mock_session):
                 result = await _get_optional_user_orig(credentials=creds)
                 assert result is fake_user
 

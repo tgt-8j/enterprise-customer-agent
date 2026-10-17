@@ -8,11 +8,11 @@
 
 **项目名**：企业客服 Agent（LangGraph + RAG + FastAPI）
 
-**一句话介绍**：一个手写 LangGraph 工作流的电商客服 Agent，能查订单、查知识库、建工单，支持多轮对话和 JWT 认证，测试覆盖率 50/50，AI 评测通过率 100%。
+**一句话介绍**：一个手写 LangGraph 工作流的电商客服 Agent，能查订单、查知识库、建工单，支持多轮对话和 JWT 认证，232 个单元测试全通过，26 个场景化 AI 评测用例。
 
 **技术栈**：Python · FastAPI · LangGraph · PostgreSQL · ChromaDB · JWT · Prometheus · Docker
 
-**代码量**：约 2500 行 Python，50 个测试用例，23 个场景化评测用例
+**代码量**：约 2500 行 Python，232 个单元测试用例（全部通过），26 个场景化 AI 评测用例
 
 ---
 
@@ -381,7 +381,7 @@ sequenceDiagram
 | 异步架构 | asyncpg + NullPool，工具调用走线程池，事件循环零阻塞 |
 | 全链路 RAG | 从文档加载到向量检索，每步参数都有设计理由 |
 | 生产级工程 | JWT 认证、结构化日志、Prometheus 指标、Docker 部署 |
-| 测试覆盖 | 50 个用例全通过，23 个场景化评测 100% 通过 |
+| 测试覆盖 | 232 个单元测试全通过，26 个场景化 AI 评测用例（LLM 自评通过率 100%） |
 
 ---
 

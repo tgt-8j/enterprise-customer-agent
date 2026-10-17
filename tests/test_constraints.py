@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from constraints.auto_fixer import AutoFixer
-from constraints.validator import ConstraintValidator
+from src.constraints.auto_fixer import AutoFixer
+from src.constraints.validator import ConstraintValidator
 
 # ── ConstraintValidator ──────────────────────────────────────────────────────
 
@@ -28,6 +28,73 @@ class TestConstraintValidatorInit:
         path.write_text("agents: {}\ncommon: {}\n")
         v = ConstraintValidator(str(path))
         assert v._config == {"agents": {}, "common": {}}
+
+
+class TestIntentToConstraintAgent:
+    """#4：意图应映射到 constraints.yaml 里的约束 agent。
+
+    上游 classify_intent 产出 query_order / knowledge_search / create_ticket /
+    chitchat，而 yaml 只定义了 customer_service / chitchat。映射后业务约束才会
+    真正加载（此前 _get_agent_config 命中不到 → 约束形同虚设）。
+    """
+
+    def test_create_ticket_intent_loads_customer_service_constraints(self):
+        v = ConstraintValidator()
+        # 映射前 create_ticket 是未知 agent，violations 全空；映射后必须命中
+        # guarantee_delivery_time / no_absolute_guarantees / must_include_ticket_id。
+        r = v.validate_output(
+            "create_ticket",
+            "您的订单已发货，保证明天送达",
+            context={"ticket_created": True},
+        )
+        rules = {vvi.rule for vvi in r.violations}
+        assert "guarantee_delivery_time" in rules
+        assert "no_absolute_guarantees" in rules
+        assert "must_include_ticket_id" in rules
+        assert r.is_blockable is True
+
+    def test_query_order_intent_loads_constraints(self):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "query_order",
+            "根据政策，您可以 7 天内无理由退货",
+            context={},
+        )
+        assert any(vvi.rule == "must_cite_policy_source" for vvi in r.violations)
+
+    def test_chitchat_intent_maps_to_chitchat_constraints(self):
+        v = ConstraintValidator()
+        # chitchat 约束是 500 字上限；超长应触发 truncate_output
+        r = v.validate_output("chitchat", "好" * 600, context={})
+        assert "truncate_output" in r.auto_fixable
+
+
+class TestTicketIdNumberConsistency:
+    """#15：create_ticket 返回整数自增工单号，校验/修复须兼容纯数字。"""
+
+    def test_numeric_ticket_id_satisfies_must_include(self):
+        v = ConstraintValidator()
+        out = "已为您创建工单，工单号 1，我们将在 24 小时内处理。"
+        r = v.validate_output(
+            "create_ticket", out, context={"ticket_created": True, "ticket_id": "1"}
+        )
+        assert r.valid is True
+
+    def test_missing_numeric_ticket_id_flags_violation_and_autofix(
+        self,
+    ):
+        v = ConstraintValidator()
+        r = v.validate_output(
+            "create_ticket", "工单已创建", context={"ticket_created": True, "ticket_id": "1"}
+        )
+        assert "add_ticket_id" in r.auto_fixable
+        fixed = AutoFixer().fix_output(
+            "工单已创建",
+            ["add_ticket_id"],
+            context={"ticket_created": True, "ticket_id": "1"},
+        )
+        assert "工单号" in fixed
+        assert "1" in fixed
 
 
 class TestValidateToolCall:

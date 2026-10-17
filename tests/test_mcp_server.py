@@ -11,7 +11,7 @@ import pytest
 
 @pytest.fixture
 def mock_db():
-    with patch("mcp_server.server.db") as m:
+    with patch("src.mcp_server.server.db") as m:
         m.ensure_tables = AsyncMock()
         m.Order = MagicMock
         m.Ticket = MagicMock
@@ -21,7 +21,7 @@ def mock_db():
 
 @pytest.fixture
 def mock_rag():
-    with patch("mcp_server.server.rag") as m:
+    with patch("src.mcp_server.server.rag") as m:
         m.search.return_value = "相关知识片段：退货政策是7天无理由。"
         yield m
 
@@ -32,7 +32,7 @@ def mock_rag():
 class TestMcpQueryOrder:
     @pytest.mark.asyncio
     async def test_order_not_found(self, mock_db):
-        from mcp_server.server import query_order
+        from src.mcp_server.server import query_order
 
         mock_session = AsyncMock()
         mock_session.get = AsyncMock(return_value=None)
@@ -46,7 +46,7 @@ class TestMcpQueryOrder:
 
     @pytest.mark.asyncio
     async def test_order_found(self, mock_db):
-        from mcp_server.server import query_order
+        from src.mcp_server.server import query_order
 
         order = MagicMock()
         order.order_id = "ORD-123"
@@ -69,7 +69,7 @@ class TestMcpQueryOrder:
 
     @pytest.mark.asyncio
     async def test_db_error_returns_error_json(self, mock_db):
-        from mcp_server.server import query_order
+        from src.mcp_server.server import query_order
 
         mock_db.ensure_tables = AsyncMock(side_effect=Exception("db down"))
 
@@ -84,21 +84,21 @@ class TestMcpQueryOrder:
 # ──────────────────────────────────────────────
 class TestMcpSearchKnowledge:
     def test_search_with_results(self, mock_rag):
-        from mcp_server.server import search_knowledge
+        from src.mcp_server.server import search_knowledge
 
         result = search_knowledge("退货政策")
         assert "退货" in result
         mock_rag.search.assert_called_once_with("退货政策")
 
     def test_search_no_result(self, mock_rag):
-        from mcp_server.server import search_knowledge
+        from src.mcp_server.server import search_knowledge
 
         mock_rag.search.return_value = "未找到相关知识。"
         result = search_knowledge("xxx")
         assert "未找到" in result
 
     def test_search_exception(self, mock_rag):
-        from mcp_server.server import search_knowledge
+        from src.mcp_server.server import search_knowledge
 
         mock_rag.search.side_effect = Exception("connection lost")
         result = search_knowledge("query")
@@ -111,7 +111,7 @@ class TestMcpSearchKnowledge:
 class TestMcpCreateTicket:
     @pytest.mark.asyncio
     async def test_order_not_found(self, mock_db):
-        from mcp_server.server import create_ticket
+        from src.mcp_server.server import create_ticket
 
         mock_session = AsyncMock()
         mock_session.get = AsyncMock(return_value=None)
@@ -125,7 +125,7 @@ class TestMcpCreateTicket:
 
     @pytest.mark.asyncio
     async def test_ticket_created(self, mock_db):
-        from mcp_server.server import create_ticket
+        from src.mcp_server.server import create_ticket
 
         order = MagicMock()
 
@@ -156,7 +156,7 @@ class TestMcpCreateTicket:
 
     @pytest.mark.asyncio
     async def test_db_error_returns_error_json(self, mock_db):
-        from mcp_server.server import create_ticket
+        from src.mcp_server.server import create_ticket
 
         mock_db.ensure_tables = AsyncMock(side_effect=Exception("boom"))
 

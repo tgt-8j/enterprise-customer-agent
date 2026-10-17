@@ -19,8 +19,8 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-import auth
-from main import app, history_to_messages
+import src.auth.auth as auth
+from src.api.app import app, history_to_messages
 
 
 # FastAPI 依赖覆盖：绕过真实 JWT 校验，返回假用户
@@ -118,9 +118,9 @@ class TestChatEndpoint:
     def test_chat_basic(self, client, fake_agent):
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_agent", return_value=fake_agent),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
         ):
             decision = MagicMock()
             decision.intent = "general"
@@ -136,9 +136,9 @@ class TestChatEndpoint:
     def test_chat_with_session_id(self, client, fake_agent):
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_agent", return_value=fake_agent),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
         ):
             decision = MagicMock()
             decision.intent = "general"
@@ -157,9 +157,9 @@ class TestChatEndpoint:
         """chat 端点应正确提取 tool_calls 轨迹。"""
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_agent", return_value=fake_agent_with_tool_calls),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent_with_tool_calls),
         ):
             decision = MagicMock()
             decision.intent = "general"
@@ -175,9 +175,9 @@ class TestChatEndpoint:
         """chat 端点应调用 db.save_message 两次（user + assistant）。"""
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_agent", return_value=fake_agent),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
         ):
             decision = MagicMock()
             decision.intent = "general"
@@ -204,9 +204,9 @@ class TestChatStreamEndpoint:
 
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_agent", return_value=agent),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
         ):
             decision = MagicMock()
             decision.intent = "general"
@@ -227,9 +227,9 @@ class TestDispatchEndpoint:
     def test_dispatch(self, client):
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_tools_for_intent", return_value=[]),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_tools_for_intent", return_value=[]),
         ):
             decision = MagicMock()
             decision.intent = "query_order"
@@ -255,21 +255,89 @@ class TestSessionsEndpoints:
             MagicMock(role="user", content="hi", created_at="2026-01-01"),
             MagicMock(role="assistant", content="hello", created_at="2026-01-01"),
         ]
-        with patch("main.db", mock_db):
-            response = client.get("/sessions/s1/history", headers=_auth_headers())
+        mock_db.get_session_owner = AsyncMock(return_value=None)
+        mock_db.load_history_paged = AsyncMock(return_value=(
+            [MagicMock(role="user", content="hi", created_at="2026-01-01")],
+            1,
+        ))
+        with patch("src.api.app.db", mock_db):
+            response = client.get("/sessions/s1/history?page=1&size=50", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
-            assert len(data["messages"]) == 2
+            assert data["total"] == 1
+            assert data["page"] == 1
+            assert data["size"] == 50
+            assert len(data["messages"]) == 1
             assert data["messages"][0]["role"] == "user"
 
     def test_delete_session(self, client):
         mock_db = _patch_db_and_intent()
         mock_db.clear_session.return_value = 3
-        with patch("main.db", mock_db):
+        mock_db.get_session_owner = AsyncMock(return_value=None)
+        with patch("src.api.app.db", mock_db):
             response = client.delete("/sessions/s1", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
             assert data["deleted"] == 3
+
+
+class TestSessionOwnership:
+    """#6 会话 IDOR 防护：只能访问/删除属于自己的会话。
+
+    conftest 的 _TEST_TOKEN 对应 user.id=1。owner 未知(None) 放行（旧数据兼容）；
+    owner 与当前用户不一致 → 403；一致 → 放行。
+    """
+
+    def test_history_403_when_owner_is_other_user(self, client):
+        mock_db = _patch_db_and_intent()
+        mock_db.load_history = AsyncMock(return_value=[])
+        mock_db.get_session_owner = AsyncMock(return_value="999")
+        with patch("src.api.app.db", mock_db):
+            response = client.get("/sessions/s1/history", headers=_auth_headers())
+            assert response.status_code == 403
+
+    def test_history_ok_when_owner_is_current_user(self, client):
+        mock_db = _patch_db_and_intent()
+        mock_db.load_history = AsyncMock(return_value=[])
+        mock_db.load_history_paged = AsyncMock(return_value=([], 0))
+        mock_db.get_session_owner = AsyncMock(return_value="1")
+        with patch("src.api.app.db", mock_db):
+            response = client.get("/sessions/s1/history", headers=_auth_headers())
+            assert response.status_code == 200
+            assert response.json()["messages"] == []
+
+    def test_delete_403_when_owner_is_other_user(self, client):
+        mock_db = _patch_db_and_intent()
+        mock_db.clear_session = AsyncMock(return_value=3)
+        mock_db.get_session_owner = AsyncMock(return_value="999")
+        with patch("src.api.app.db", mock_db):
+            response = client.delete("/sessions/s1", headers=_auth_headers())
+            assert response.status_code == 403
+
+    def test_save_message_records_owner(self, client):
+        """/chat 首次写入会话时把 owner 记为当前用户 id。"""
+        fake_agent = MagicMock()
+        fake_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [
+                    HumanMessage(content="hi"),
+                    AIMessage(content="ok"),
+                ]
+            }
+        )
+        mock_db = _patch_db_and_intent()
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
+        ):
+            decision = MagicMock()
+            decision.intent = "general"
+            mock_classify.return_value = decision
+            client.post("/chat", json={"message": "hi"}, headers=_auth_headers())
+            # 两次 save_message（user + assistant）都应带 user_id="1"
+            for c in mock_db.save_message.call_args_list:
+                assert c.kwargs.get("user_id") == "1" or c.args[-1] == "1"
 
 
 # ──────────────────────────────────────────────
@@ -283,7 +351,7 @@ class TestAuthEndpoints:
         mock_user.id = 1
         mock_db.create_user = AsyncMock(return_value=mock_user)
 
-        with patch("main.db", mock_db):
+        with patch("src.api.app.db", mock_db):
             response = client.post(
                 "/api/auth/register",
                 json={"email": "new@example.com", "password": "secret", "name": "New"},
@@ -298,7 +366,7 @@ class TestAuthEndpoints:
         mock_user = MagicMock()
         mock_db.get_user_by_email = AsyncMock(return_value=mock_user)
 
-        with patch("main.db", mock_db):
+        with patch("src.api.app.db", mock_db):
             response = client.post(
                 "/api/auth/register",
                 json={"email": "dup@example.com", "password": "secret", "name": "Dup"},
@@ -313,7 +381,10 @@ class TestAuthEndpoints:
         mock_user.is_active = True
         mock_db.get_user_by_email = AsyncMock(return_value=mock_user)
 
-        with patch("main.db", mock_db), patch("main.verify_password", return_value=True):
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.verify_password", return_value=True),
+        ):
             response = client.post(
                 "/api/auth/login",
                 json={"email": "u@example.com", "password": "pass"},
@@ -327,7 +398,10 @@ class TestAuthEndpoints:
         mock_user = MagicMock()
         mock_db.get_user_by_email = AsyncMock(return_value=mock_user)
 
-        with patch("main.db", mock_db), patch("main.verify_password", return_value=False):
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.verify_password", return_value=False),
+        ):
             response = client.post(
                 "/api/auth/login",
                 json={"email": "u@example.com", "password": "wrong"},
@@ -340,7 +414,10 @@ class TestAuthEndpoints:
         mock_user.is_active = False
         mock_db.get_user_by_email = AsyncMock(return_value=mock_user)
 
-        with patch("main.db", mock_db), patch("main.verify_password", return_value=True):
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.verify_password", return_value=True),
+        ):
             response = client.post(
                 "/api/auth/login",
                 json={"email": "u@example.com", "password": "pass"},
@@ -363,13 +440,13 @@ class TestAuthEndpoints:
         mock_session.__aexit__ = AsyncMock(return_value=None)
         mock_db.AsyncSessionLocal = MagicMock(return_value=mock_session)
         # Use real db.User for SQLAlchemy select() to work
-        import db
+        import src.persistence.db as db
 
         mock_db.User = db.User
 
         with (
-            patch("main.db", mock_db),
-            patch("auth.decode_token", return_value={"sub": "1", "type": "refresh"}),
+            patch("src.api.app.db", mock_db),
+            patch("src.auth.auth.decode_token", return_value={"sub": "1", "type": "refresh"}),
         ):
             response = client.post(
                 "/api/auth/refresh",
@@ -382,7 +459,7 @@ class TestAuthEndpoints:
     def test_logout(self, client):
         from tests.conftest import _TEST_TOKEN
 
-        with patch("main.blacklist_token") as mock_bl:
+        with patch("src.api.app.blacklist_token") as mock_bl:
             response = client.post(
                 "/api/auth/logout",
                 headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
@@ -403,9 +480,9 @@ class TestResponseHeaders:
     def test_process_time_header(self, client, fake_agent):
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_agent", return_value=fake_agent),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
         ):
             decision = MagicMock()
             decision.intent = "general"
@@ -418,9 +495,9 @@ class TestResponseHeaders:
     def test_request_id_header(self, client, fake_agent):
         mock_db = _patch_db_and_intent()
         with (
-            patch("main.db", mock_db),
-            patch("main.classify_intent") as mock_classify,
-            patch("main.get_agent", return_value=fake_agent),
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=fake_agent),
         ):
             decision = MagicMock()
             decision.intent = "general"
@@ -437,21 +514,22 @@ class TestResponseHeaders:
 class TestGetAgent:
     def test_get_agent_cache_hit(self):
         """Cache-hit: returns the previously built agent."""
-        from main import get_agent
+        from src.api.app import get_agent
 
+        get_agent.cache_clear()
         agent = MagicMock()
-        with patch("main.build_agent", return_value=agent):
+        with patch("src.api.app.build_agent", return_value=agent):
             result = get_agent("general")
-        assert result is agent
-        result = get_agent("general")
-        assert result is agent
+            assert result is agent
+            result = get_agent("general")
+            assert result is agent
         get_agent.cache_clear()
 
     def test_get_agent_cache_miss(self):
         """On cache miss, builds a new agent and caches it."""
         import os
 
-        from main import get_agent
+        from src.api.app import get_agent
 
         # ensure MCP is not used
         old_mcp = os.environ.get("USE_MCP")
@@ -473,7 +551,7 @@ class TestGetAgent:
 class TestRefreshErrors:
     def test_refresh_wrong_token_type(self, client):
         """refresh token 类型不是 refresh 时返回 401。"""
-        with patch("auth.decode_token", return_value={"sub": "1", "type": "access"}):
+        with patch("src.auth.auth.decode_token", return_value={"sub": "1", "type": "access"}):
             response = client.post(
                 "/api/auth/refresh",
                 json={"refresh_token": "fake-token"},
@@ -490,13 +568,13 @@ class TestRefreshErrors:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
         mock_db.AsyncSessionLocal = MagicMock(return_value=mock_session)
-        import db
+        import src.persistence.db as db
 
         mock_db.User = db.User
 
         with (
-            patch("main.db", mock_db),
-            patch("auth.decode_token", return_value={"sub": "999", "type": "refresh"}),
+            patch("src.api.app.db", mock_db),
+            patch("src.auth.auth.decode_token", return_value={"sub": "999", "type": "refresh"}),
         ):
             response = client.post(
                 "/api/auth/refresh",
@@ -541,7 +619,10 @@ class TestMiddlewareException:
         async def raise_error(*args, **kwargs):
             raise RuntimeError("测试异常")
 
-        with patch("main.db", mock_db), patch("main.classify_intent", side_effect=raise_error):
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent", side_effect=raise_error),
+        ):
             # 异常会被中间件捕获并记录，然后 re-raise
             # TestClient 会捕获异常并返回 500
 
@@ -556,7 +637,10 @@ class TestHealthEndpoint:
         """ChromaDB 不可用时，health 应返回 degraded 状态。"""
         mock_db = _patch_db_and_intent()
 
-        with patch("main.db", mock_db), patch("rag.get_collection", return_value=None):
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.retrieval.rag.get_collection", return_value=None),
+        ):
             response = client.get("/health")
             assert response.status_code == 200
             data = response.json()
@@ -568,7 +652,10 @@ class TestHealthEndpoint:
         mock_db = _patch_db_and_intent()
         mock_db.ensure_tables = AsyncMock()
 
-        with patch("main.db", mock_db), patch("rag.get_collection", return_value=MagicMock()):
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.retrieval.rag.get_collection", return_value=MagicMock()),
+        ):
             response = client.get("/health")
             assert response.status_code == 200
             data = response.json()

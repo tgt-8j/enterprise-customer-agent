@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agent import build_agent
+from src.graph.graph import build_agent
 
 
 class FakeChunk:
@@ -86,7 +86,7 @@ async def test_build_agent_with_intent():
 @pytest.mark.asyncio
 async def test_get_tools_for_intent():
     """测试工具路由。"""
-    from agent import get_tools_for_intent
+    from src.graph.graph import get_tools_for_intent
 
     tools = await get_tools_for_intent("query_order")
     assert len(tools) == 1
@@ -101,7 +101,7 @@ async def test_get_tools_for_intent():
 
 def test_get_tools_for_intent_knowledge_search():
     """测试 knowledge_search 意图只返回 search_knowledge 工具。"""
-    from agent import _get_tools_for_intent
+    from src.graph.graph import _get_tools_for_intent
 
     tools = _get_tools_for_intent("knowledge_search")
     assert len(tools) == 1
@@ -110,7 +110,7 @@ def test_get_tools_for_intent_knowledge_search():
 
 def test_get_tools_for_intent_mcp():
     """测试 use_mcp=True 时返回所有工具。"""
-    from agent import _get_tools_for_intent
+    from src.graph.graph import _get_tools_for_intent
 
     tools = _get_tools_for_intent("general", use_mcp=True)
     assert len(tools) == 3
@@ -119,7 +119,7 @@ def test_get_tools_for_intent_mcp():
 @pytest.mark.asyncio
 async def test_get_mcp_tools_success():
     """测试 MCP 加载成功路径（mock MCP client）。"""
-    from agent import get_mcp_tools
+    from src.graph.graph import get_mcp_tools
 
     mock_tool = MagicMock()
     mock_tool.name = "query_order"
@@ -138,8 +138,8 @@ async def test_get_mcp_tools_success():
 @pytest.mark.asyncio
 async def test_get_mcp_tools_fallback():
     """测试 MCP 加载失败时回退到本地工具。"""
-    from agent import get_mcp_tools
-    from tools import ALL_TOOLS
+    from src.graph.graph import get_mcp_tools
+    from src.graph.nodes.tools import ALL_TOOLS
 
     with patch(
         "langchain_mcp_adapters.client.MultiServerMCPClient",

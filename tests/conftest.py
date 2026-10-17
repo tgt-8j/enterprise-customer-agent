@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 # Patch get_current_user BEFORE importing app, so FastAPI uses the fake version
-import auth  # noqa: E402 - must be before db/main imports
+import src.auth.auth as auth  # noqa: E402 - must be before db/main imports
 
 _orig_get_current_user = auth.get_current_user
 _orig_get_optional_user = auth.get_optional_user
@@ -49,12 +49,12 @@ async def _fake_get_current_user(credentials=None):
 
 auth.get_current_user = _fake_get_current_user  # Patch before app is imported
 
-import db  # noqa: E402 - must be after auth patch
-import main  # noqa: E402 - need to patch main's binding too
-from auth import create_access_token, hash_password  # noqa: E402
+import src.api.app as main  # noqa: E402 - need to patch main's binding too
+import src.persistence.db as db  # noqa: E402 - must be after auth patch
+from src.auth.auth import create_access_token, hash_password  # noqa: E402
 
 main.get_current_user = _fake_get_current_user  # from-import binds separately in main
-from main import app  # noqa: E402
+from src.api.app import app  # noqa: E402
 
 # Pre-generate test token at module level to avoid python-jose + cryptography
 # compatibility issues when called multiple times in pytest async fixtures.
@@ -220,7 +220,7 @@ def client_with_fake_llm(client_with_token):
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
     from langchain_core.messages import AIMessage
 
-    import agent
+    import src.graph.graph as agent
 
     class DummyFakeLLM(FakeMessagesListChatModel):
         def __init__(self) -> None:

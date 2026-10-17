@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import func, select  # noqa: E402
 
-from db import AsyncSessionLocal, Order, ensure_tables  # noqa: E402
+from src.persistence.db import AsyncSessionLocal, Order, ensure_tables  # noqa: E402
 
 # 覆盖客服场景的主要分支：正常在途 / 配送中 / 已签收 / 待发货 / 物流异常 / 退款
 SEED_ORDERS = [

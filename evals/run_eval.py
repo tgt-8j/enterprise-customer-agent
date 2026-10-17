@@ -27,9 +27,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 
-import db  # noqa: E402
-from agent import build_agent  # noqa: E402
-from main import history_to_messages  # noqa: E402
+import src.persistence.db as db  # noqa: E402
+from src.api.app import history_to_messages  # noqa: E402
+from src.graph.graph import build_agent  # noqa: E402
 
 CASES_FILE = os.path.join(os.path.dirname(__file__), "cases.json")
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")

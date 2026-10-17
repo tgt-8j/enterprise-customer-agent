@@ -3,6 +3,8 @@
 
 # 虚拟环境
 .venv/
+venv/
+virtualenv/
 
 # Python 产物
 __pycache__/
@@ -13,7 +15,19 @@ __pycache__/
 chroma_db/
 logs/
 tickets.json
+*.sqlite3
 
+# CI / 测试结果产物（本地产出，不提交）
+ci_*.json
+ci_*.txt
+ci_*.gz
+ci_*.zip
+coverage*.json
+test_output.txt
+test_result.txt
+_b64_line.txt
+code_issues.md
+interview_questions.md
 # IDE
 .idea/
 .vscode/
@@ -32,3 +46,4 @@ htmlcov/
 # 本次会话生成的文档（不提交）
 docs/code_review_*.md
 docs/session_log_*.md
+.pytest_tmp/

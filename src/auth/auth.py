@@ -1,4 +1,4 @@
-"""JWT 认证模块（V7 企业级增强）。
+"""JWT 认证模块。
 
 设计要点：
 - 双令牌模式：access token（短期，15分钟）+ refresh token（长期，7天）
@@ -17,6 +17,7 @@
         ...
 """
 
+import time
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -24,8 +25,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
-import db
-from config import settings
+import src.persistence.db as db
+from src.config.settings import settings
 
 # ---------- 密码哈希 ----------
 # 直接用 bcrypt 原生 API（比 passlib 更轻量，避免 passlib 1.7 与 bcrypt 5.0 的兼容性问题）。
@@ -41,16 +42,36 @@ security = HTTPBearer(auto_error=False)
 # ---------- Token blacklist abstract interface ----------
 # Default: in-memory set (single-instance). Multi-instance: inject Redis via set_blacklist_backend().
 class _BlacklistBackend:
-    """In-memory token blacklist (default for single instance)."""
+    """In-memory token blacklist with TTL (default for single instance).
+
+    每个 token 携带它自己的过期时间戳：token 到期后自动视为"未拉黑"，
+    因此长期运行不会无限增长（#16 原实现 set 永不淘汰 → 内存只增不减）。
+    """
 
     def __init__(self):
-        self._tokens: set[str] = set()
+        # token -> 过期时间戳（epoch seconds）。超过该时间即自动失效。
+        self._tokens: dict[str, float] = {}
 
-    def add(self, token: str) -> None:
-        self._tokens.add(token)
+    def add(self, token: str, expires_at: float) -> None:
+        # 顺手淘汰已过期的条目，控制内存
+        self._prune()
+        self._tokens[token] = expires_at
 
-    def contains(self, token: str) -> bool:
-        return token in self._tokens
+    def contains(self, token: str, now: float | None = None) -> bool:
+        exp = self._tokens.get(token)
+        if exp is None:
+            return False
+        ts = now if now is not None else time.time()
+        # 已到期 → 自动清掉并返回 False
+        if ts >= exp:
+            self._tokens.pop(token, None)
+            return False
+        return True
+
+    def _prune(self) -> None:
+        ts = time.time()
+        for k in [k for k, exp in self._tokens.items() if ts >= exp]:
+            self._tokens.pop(k, None)
 
     def clear(self) -> None:
         self._tokens.clear()
@@ -131,12 +152,53 @@ def _decode(token: str) -> dict:
         )
 
 
+def _parse_user_id(sub: str | None) -> int:
+    """把 token 的 sub 解析成 user_id(int)。
+
+    sub 缺失或非数字 → 视为无效令牌（抛 401），而不是让下游 int() 崩溃成 500。
+    """
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="令牌缺少用户标识",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return int(str(sub))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="令牌用户标识无效",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 # ---------- 令牌管理 ----------
 
 
 def blacklist_token(token: str) -> None:
-    """将 token 加入黑名单（注销时使用）。"""
-    _blacklist_backend.add(token)
+    """将 token 加入黑名单（注销时使用）。
+
+    过期时间 = 该 token 自身的 exp（解码后）+ 少量缓冲；无法解析时退化为
+    access token 的默认有效期，保证短期内拉黑仍然有效且不会常驻内存。
+    """
+    try:
+        import jose
+
+        payload = jose.jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            options={"verify_exp": False},
+        )
+        exp = payload.get("exp")
+        if exp is None:
+            raise ValueError("no exp")
+        expires_at = float(exp) + 60  # 60s 缓冲
+    except Exception:
+        # 解析失败：保守用 access token 有效期作为内存驻留上限
+        expires_at = time.time() + settings.access_token_expire_minutes * 60
+    _blacklist_backend.add(token, expires_at)
 
 
 def decode_token(token: str) -> dict:
@@ -174,15 +236,9 @@ async def get_current_user(
             detail="无效的令牌类型",
         )
 
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="令牌缺少用户标识",
-        )
-
+    user_id = _parse_user_id(payload.get("sub"))
     async with db.AsyncSessionLocal() as session:
-        result = await session.execute(select(db.User).where(db.User.id == int(user_id)))
+        result = await session.execute(select(db.User).where(db.User.id == user_id))
         user = result.scalar_one_or_none()
 
     if not user or not user.is_active:
@@ -210,8 +266,12 @@ async def get_optional_user(
         user_id = payload.get("sub")
         if not user_id:
             return None
+        try:
+            user_id = int(str(user_id))
+        except (TypeError, ValueError):
+            return None
         async with db.AsyncSessionLocal() as session:
-            result = await session.execute(select(db.User).where(db.User.id == int(user_id)))
+            result = await session.execute(select(db.User).where(db.User.id == user_id))
             return result.scalar_one_or_none()
     except (HTTPException, Exception):
         return None

@@ -25,11 +25,16 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from llm import get_llm
-from tools import ALL_TOOLS
+from src.graph.nodes.tools import ALL_TOOLS
+from src.llm.client import get_llm
 
 logger = logging.getLogger(__name__)
 
+# ReAct 循环递归上限：单轮 agent↔tools 往返次数。正常多工具场景远用不到
+# 20，但 LLM 在工具调用里打转/死循环时，LangGraph 会在超限时抛
+# GraphRecursionError 而不是无限递归。通过 ainvoke/invoke 的
+# config={"recursion_limit": AGENT_RECURSION_LIMIT} 生效。
+AGENT_RECURSION_LIMIT = 20
 SYSTEM_PROMPT = """你是一个企业电商客服 Agent，负责处理用户关于订单和物流的问题。
 
 你可以使用以下工具：
@@ -80,10 +85,8 @@ class AgentState(TypedDict):
     # add_messages 是 langgraph 内置的 reducer：
     # 每次节点返回 {"messages": [新消息]} 时，会自动追加到列表末尾，
     # 而不是覆盖整个列表 —— 这就是"多轮对话历史"最原始的雏形，
-    # V4 阶段做真正的 Memory 时，会在这个基础上做持久化和裁剪。
+    # 后续做真正的 Memory 时，会在这个基础上做持久化和裁剪。
     messages: Annotated[list[AnyMessage], add_messages]
-    # 意图分发结果（由 dispatch 节点填充，主 agent 节点消费）
-    dispatch: dict
 
 
 def build_agent(llm=None, use_mcp=False, intent="general"):
@@ -107,10 +110,11 @@ def build_agent(llm=None, use_mcp=False, intent="general"):
 
     def call_model(state: AgentState):
         messages = state["messages"]
-        # 第一次调用时，把 system prompt 插到最前面
-        if not any(getattr(m, "type", None) == "system" for m in messages):
-            messages = [SystemMessage(content=system_prompt)] + messages
-        response = llm_with_tools.invoke(messages)
+        # 每轮都把 system prompt 插在最前：历史消息里只有 user/assistant，
+        # SystemMessage 从不会写回 state（add_messages reducer 追加的是节点返回值
+        # 的 AI/Tool 消息），所以每次重新拼是安全的，也保证了多轮 ReAct 时
+        # 每轮 LLM 调用都能看到约束/提示。
+        response = llm_with_tools.invoke([SystemMessage(content=system_prompt)] + list(messages))
         return {"messages": [response]}
 
     graph = StateGraph(AgentState)
@@ -121,7 +125,12 @@ def build_agent(llm=None, use_mcp=False, intent="general"):
     graph.add_conditional_edges("agent", tools_condition, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")
 
-    return graph.compile()
+    # 递归上限在 ainvoke/invoke 时通过 config 传入（见下方 AGENT_RECURSION_LIMIT），
+    # 而不是 compile() 参数——本版本 LangGraph 的 compile() 不接收 recursion_limit，
+    # 它由 RunnableConfig 的 "recursion_limit" 控制。
+    compiled = graph.compile()
+    # 暴露递归上限给调用方：ainvoke/invoke 时用 config={"recursion_limit": ...} 生效。
+    return compiled
 
 
 def _get_tools_for_intent(intent: str, use_mcp: bool = False):
@@ -156,8 +165,6 @@ async def get_tools_for_intent(intent: str, use_mcp: bool = False):
     """
     if use_mcp:
         return await get_mcp_tools()
-        # 此函数仅在服务启动时调用（此时无运行中的事件循环），不会触发 RuntimeError。
-        # 若在已运行的 async 上下文中调用需改为 await get_mcp_tools()。
     return _get_tools_for_intent(intent)
 
 

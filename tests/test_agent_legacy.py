@@ -21,7 +21,7 @@ import asyncio
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent import build_agent
+from src.graph.graph import build_agent
 
 
 class FakeToolCallingLLM(FakeMessagesListChatModel):
@@ -72,7 +72,7 @@ def run_async(coro):
     asyncio.run 会让连接池里的旧连接失效（Event loop is closed）。
     所以每次循环结束后显式 dispose，下个循环重建连接。
     """
-    import db
+    import src.persistence.db as db
 
     try:
         return asyncio.run(coro)
@@ -121,7 +121,7 @@ def test_history_to_messages():
     """历史行 → LangChain 多轮消息数组的角色映射正确。"""
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from main import history_to_messages
+    from src.api.app import history_to_messages
 
     class Row:
         def __init__(self, role, content):

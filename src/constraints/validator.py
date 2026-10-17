@@ -32,8 +32,12 @@ _ABSOLUTE_GUARANTEE_WORDS = ["保证", "一定", "绝对", "100%", "必然", "�
 # 配送相关关键词
 _DELIVERY_KEYWORDS = ["送达", "到达", "到的", "发货", "配送"]
 
-# 工单号模式：TC + 6~12 位数字
-_TICKET_ID_RE = re.compile(r"TC\d{6,12}")
+# 工单号模式：兼容两种编号
+# - 数据库自增工单号：纯数字（create_ticket 工具当前返回 int 自增 ticket_id）
+# - 业务工单号：TC + 6~12 位数字（外部系统/未来业务编号规范）
+# 用交替模式让两种格式都能被"包含工单号"检查命中，
+# 避免校验器与 create_ticket 的实际返回格式脱节（见 tools.py create_ticket）。
+_TICKET_ID_RE = re.compile(r"(?:TC\d{6,12}|\d{1,20})")
 
 # 政策来源标注模式：[来源: xxx] 或 "根据《xxx》"
 _POLICY_SOURCE_RE = re.compile(r"\[来源:.*?\]|根据《[^》]+》")
@@ -82,6 +86,19 @@ class ConstraintValidator:
 
     def _get_agent_config(self, agent_id: str) -> dict[str, Any]:
         agents = self._config.get("agents", {})
+        # 兼容"意图名"作为 agent_id 传入的情况：
+        # 上游（app.py /chat）传的是意图（query_order / knowledge_search /
+        # create_ticket / chitchat），而 constraints.yaml 只定义了
+        # customer_service 与 chitchat。若不映射，_get_agent_config 永远
+        # 命中不到，业务约束就一条都不会加载（形同虚设）。
+        # 这里把"会用到业务工具的意图"统一映射到 customer_service 约束集。
+        intent_to_agent = {
+            "query_order": "customer_service",
+            "knowledge_search": "customer_service",
+            "create_ticket": "customer_service",
+            "chitchat": "chitchat",
+        }
+        agent_id = intent_to_agent.get(agent_id, agent_id)
         return agents.get(agent_id, {})
 
     def validate_tool_call(self, agent_id: str, tool_name: str) -> ValidationResult:
@@ -187,6 +204,43 @@ class ConstraintValidator:
                             detail="输出中承诺退款但未核实订单信息",
                         )
                     )
+
+        if "fabricate_order_info" in forbidden_actions:
+            # 检测到明确陈述具体订单事实（订单号/状态/金额）但上下文中没有核实依据
+            if re.search(r"(订单号\s*[:：]?\s*\d{6,}|您的订单已|订单状态为)", output):
+                if not context.get("order_verified"):
+                    violations.append(
+                        Violation(
+                            rule="fabricate_order_info",
+                            severity="error",
+                            detail="输出中包含具体订单信息但未核实",
+                        )
+                    )
+
+        if "disclose_competitor_pricing" in forbidden_actions:
+            competitor_keywords = ["竞品", "竞争对手", "某品牌价格", "别家", "友商"]
+            pricing_keywords = ["报价", "价格", "成本", "利润"]
+            has_competitor = any(kw in output for kw in competitor_keywords)
+            has_pricing = any(kw in output for kw in pricing_keywords)
+            if has_competitor and has_pricing:
+                violations.append(
+                    Violation(
+                        rule="disclose_competitor_pricing",
+                        severity="error",
+                        detail="输出中透露了竞品定价信息",
+                    )
+                )
+
+        if "provide_medical_advice" in forbidden_actions:
+            medical_keywords = ["诊断", "处方", "用药", "剂量", "治疗方案", "建议服用"]
+            if any(kw in output for kw in medical_keywords):
+                violations.append(
+                    Violation(
+                        rule="provide_medical_advice",
+                        severity="error",
+                        detail="输出中提供了医疗建议（超出客服职责范围）",
+                    )
+                )
 
         # ---- 检查 output_constraints ----
         max_len = self._get_constraint_value(output_constraints, "max_response_length")
