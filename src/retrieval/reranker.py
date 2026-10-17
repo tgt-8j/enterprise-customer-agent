@@ -17,6 +17,9 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # 来源可信度权重（越高越权威）
+# 注意：内部知识库的 13 篇文档都命中不了下面的 key，全部落到 DEFAULT_WEIGHT，
+# 也就是"同权"。这张表是为将来接入外部来源（网页/论坛/新闻）预留的；
+# 目前真正在起作用的是位置衰减，别把来源权重讲成已经生效的能力。
 SOURCE_WEIGHTS: dict[str, float] = {
     ".gov.cn": 0.95,
     ".edu.cn": 0.90,
@@ -99,6 +102,8 @@ def two_stage_rerank(
         return []
 
     # --- 第二级：精排（来源权重 + 位置衰减）---
+    # 内部知识库的 source 全部命中 DEFAULT_WEIGHT，这一项是常数；
+    # 等接入外部来源（网页/新闻）后权重才会真正拉开差距。
     results = []
     for rank, (orig_idx, candidate) in enumerate(filtered):
         sim = embedding_similarities[orig_idx] if embedding_similarities is not None else None

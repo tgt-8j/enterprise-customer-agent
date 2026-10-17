@@ -229,3 +229,33 @@ class TestHybridFallback:
         assert "向量分很低" not in documents
         assert "向量分很高" in documents
         assert next(r for r in results if r.document == "只被 BM25 召回").similarity is None
+
+    def test_search_honours_top_k(self):
+        """top_k 之前是接了不用的摆设参数，最终条数写死成常量。"""
+        from src.retrieval.bm25 import BM25Retriever
+        from src.retrieval.rag import search
+
+        retriever = BM25Retriever()
+        retriever.build(
+            [
+                "退货政策一：七天无理由。",
+                "退货政策二：商品需完好。",
+                "退货政策三：运费由商家承担。",
+            ],
+            ["01-退货总则", "02-七天无理由", "04-退货运费"],
+        )
+
+        mock_coll = MagicMock()
+        mock_coll.count.return_value = 3
+
+        with (
+            patch("src.retrieval.rag.get_collection", return_value=mock_coll),
+            patch("src.retrieval.rag._bm25_retriever", retriever),
+            patch("src.retrieval.rag.embed_texts", side_effect=RuntimeError("down")),
+        ):
+            single = search("退货", top_k=1)
+            default = search("退货")
+
+        assert "[1]" in single
+        assert "[2]" not in single
+        assert "[3]" in default  # 默认仍然取 Top-5（这里只有 3 条候选）

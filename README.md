@@ -3,7 +3,7 @@
 > 基于 LangGraph + RAG 的企业客服 Agent，支持订单查询、知识库检索和工单创建。手写 LangGraph 工作流实现 ReAct 循环，测试与 CI 均通过。
 
 ```
-269 tests · Python 3.12（21 个 DB 用例在未启动 PostgreSQL 时自动 skip）
+271 tests · Python 3.12（21 个 DB 用例在未启动 PostgreSQL 时自动 skip）
 ```
 
 ## 场景演示
@@ -146,7 +146,7 @@ docker compose --profile mcp up -d      # mcp_server 监听 8001
 ## 测试与评测
 
 ```bash
-# 单元测试（269 个；未启动 PostgreSQL 时 21 个 DB 用例自动 skip）
+# 单元测试（271 个；未启动 PostgreSQL 时 21 个 DB 用例自动 skip）
 pytest tests/ -v
 
 # AI 行为评测（26 个场景化用例，需要真实 LLM + 已建知识库）
@@ -192,7 +192,7 @@ enterprise-customer-agent/
 │   ├── verify_mcp.py    # MCP 专项验证
 │   └── verify_constraints.py  # 约束验证演示
 │
-├── tests/               # 单元测试（269 个，DB 用例需 Postgres）
+├── tests/               # 单元测试（271 个，DB 用例需 Postgres）
 │   ├── test_fastapi.py  # FastAPI 层测试
 │   ├── test_main_mock.py  # 端点级 mock 测试（含约束拦截、SSE 终态）
 │   ├── test_constraints.py  # 约束验证与自动修复
@@ -229,7 +229,9 @@ enterprise-customer-agent/
 
 **建库**（一次性）：扫描 `knowledge/*.md` → 结构感知切分（350 字 chunk + 60 字 overlap）→ Embedding 向量化 → 写入 ChromaDB（cosine）。
 
-**检索**（每次请求）：query 向量化查 ChromaDB（阈值 0.25）+ BM25 关键词召回（中文按单字 + 二元组切分）→ RRF 融合 → 两级 rerank（相似度粗筛 + 来源权重/位置精排）→ 取 Top-5 带来源标注返回。任一路不可用会自动降级（BM25 挂了走纯向量，embedding 挂了走纯 BM25）。
+**检索**（每次请求）：query 向量化查 ChromaDB（阈值 0.25）+ BM25 关键词召回（中文按单字 + 二元组切分）→ RRF 融合 → 两级 rerank（相似度粗筛 + 位置衰减精排）→ 取 Top-5 带来源标注返回。任一路不可用会自动降级（BM25 挂了走纯向量，embedding 挂了走纯 BM25）。
+
+> 来源权重表（`.gov.cn` / `news` / `blog` …）是为将来接入外部来源预留的，当前 13 篇内部文档全部同权，这一维不参与排序。
 
 ### Q3：Embedding 接口挂了怎么办？
 

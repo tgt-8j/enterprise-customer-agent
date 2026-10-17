@@ -717,8 +717,26 @@ class TestHealthEndpoint:
         ):
             response = client.get("/health")
             assert response.status_code == 200
-            data = response.json()
-            assert data["status"] == "healthy"
+            assert response.json()["status"] == "healthy"
+
+    def test_health_does_not_leak_exception_details(self, client):
+        """/health 不需要认证，异常原文（含连接串）不能进响应体。"""
+        mock_db = _patch_db_and_intent()
+        mock_db.ensure_tables = AsyncMock(
+            side_effect=RuntimeError("postgresql://postgres:s3cret@db-host:5432/agent_demo")
+        )
+
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.retrieval.rag.get_collection", return_value=MagicMock()),
+        ):
+            response = client.get("/health")
+
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["checks"]["postgres"] == "error"
+        assert "s3cret" not in response.text
+        assert "db-host" not in response.text
 
 
 # ──────────────────────────────────────────────

@@ -8,11 +8,11 @@
 
 **项目名**：企业客服 Agent（LangGraph + RAG + FastAPI）
 
-**一句话介绍**：一个手写 LangGraph 工作流的电商客服 Agent，能查订单、查知识库、建工单，支持多轮对话和 JWT 认证，269 个单元测试，26 个场景化 AI 评测用例。
+**一句话介绍**：一个手写 LangGraph 工作流的电商客服 Agent，能查订单、查知识库、建工单，支持多轮对话和 JWT 认证，271 个单元测试，26 个场景化 AI 评测用例。
 
 **技术栈**：Python · FastAPI · LangGraph · PostgreSQL · ChromaDB · JWT · Prometheus · Docker
 
-**代码量**：约 3200 行源码 + 3300 行测试，269 个单元测试用例（21 个需要 PostgreSQL），26 个场景化 AI 评测用例
+**代码量**：约 3200 行源码 + 3300 行测试，271 个单元测试用例（21 个需要 PostgreSQL），26 个场景化 AI 评测用例
 
 ---
 
@@ -354,9 +354,12 @@ sequenceDiagram
 
 ---
 
-### Q15：LLM 评测通过率从 74% 升到 100%，改了哪些 Prompt？
+### Q15：LLM 评测通过率从 74% 升到稳定 96%+，改了哪些 Prompt？
 
-> 失败了 6 个用例，根因两类：
+> 注：单次跑出 100% 不作为标准——同一份代码连续三次会在 91%~100% 波动（见 troubleshooting #8），
+> 所以这里只声称"稳定 96% 以上"。
+>
+> 失败了 6 个用例，根因三类：
 >
 > **第一类：模型不按规则调工具（4 个）**
 > - `tool_select_006/rag_002/rag_004`：发票/退货/7天问题，模型直接用训练知识回答了，没调 search_knowledge
@@ -381,7 +384,7 @@ sequenceDiagram
 | 异步架构 | asyncpg + NullPool，工具调用走线程池，事件循环零阻塞 |
 | 全链路 RAG | 从文档加载到向量检索，每步参数都有设计理由 |
 | 生产级工程 | JWT 认证、结构化日志、Prometheus 指标、Docker 部署 |
-| 测试覆盖 | 269 个单元测试（21 个 DB 用例需 Postgres），26 个场景化 AI 评测用例 |
+| 测试覆盖 | 271 个单元测试（21 个 DB 用例需 Postgres），26 个场景化 AI 评测用例 |
 
 ---
 

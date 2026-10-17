@@ -421,8 +421,8 @@ def _rrf_fuse(
 
 
 # ---------- 8. 主搜索入口 ----------
-def search(query: str, top_k: int = 3) -> str:
-    """混合检索：向量 + BM25 RRF 融合 → 两级 Rerank → 返回片段。
+def search(query: str, top_k: int = RERANK_TOP_K_FINAL) -> str:
+    """混合检索：向量 + BM25 RRF 融合 → 两级 Rerank → 返回 top_k 条片段。
 
     返回给上层的是一段带来源标注的纯文本上下文，Agent 拿到后
     组织成自然语言回复。注意这个函数永远不抛异常：
@@ -477,7 +477,8 @@ def search(query: str, top_k: int = 3) -> str:
             for _, source, doc, _ in fused[:RRERANK_TOP_K_COARSE]
         ]
         similarities = [sim for sim, _, _, _ in fused[:RRERANK_TOP_K_COARSE]]
-        reranked = two_stage_rerank(candidates, similarities, top_k_final=RERANK_TOP_K_FINAL)
+        # top_k 之前是"接了但没用"的摆设参数，最终条数被写死成常量；现在真的生效
+        reranked = two_stage_rerank(candidates, similarities, top_k_final=max(1, int(top_k)))
         reranked = check_conflicts(reranked)
 
         # --- 第 5 步：格式化输出 ---

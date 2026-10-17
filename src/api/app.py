@@ -861,7 +861,9 @@ async def health() -> dict[str, Any]:
     """增强型健康检查：验证 PostgreSQL 和 ChromaDB 连通性。
 
     返回 status: "healthy" 当所有依赖正常，"degraded" 当部分依赖异常。
-    这个端点不需要认证（Kubernetes / Docker healthcheck 需要无障碍访问）。
+    这个端点不需要认证（Kubernetes / Docker healthcheck 需要无障碍访问），
+    所以响应里只给 ok/error 这种粗粒度状态：异常原文里有连接串、主机名、
+    账号等信息，只能进日志，不能进这个匿名可访问的响应体。
     """
     import asyncio
 
@@ -873,8 +875,9 @@ async def health() -> dict[str, Any]:
             async with db.engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
             return "ok"
-        except Exception as e:
-            return f"error: {e}"
+        except Exception:
+            logger.warning("health check: PostgreSQL 不可用", exc_info=True)
+            return "error"
 
     def check_chroma() -> str:
         try:
@@ -882,8 +885,9 @@ async def health() -> dict[str, Any]:
 
             coll = get_collection()
             return "ok" if coll is not None else "no_collection"
-        except Exception as e:
-            return f"error: {e}"
+        except Exception:
+            logger.warning("health check: ChromaDB 不可用", exc_info=True)
+            return "error"
 
     # DB 检查是异步的，ChromaDB 检查是同步的（本地 SQLite），需要放线程池
     db_status = await check_db()
