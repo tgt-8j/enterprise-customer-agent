@@ -47,3 +47,12 @@ htmlcov/
 docs/code_review_*.md
 docs/session_log_*.md
 .pytest_tmp/
+
+# Office 临时锁文件（Word/Excel 打开文档时生成，关闭后自动消失）
+~$*
+
+# 一次性调试脚本与产物（简历排版等，与本项目无关）
+_analyze_*.py
+_build_docx.py
+_orig_*.xml
+test_ascii.docx
