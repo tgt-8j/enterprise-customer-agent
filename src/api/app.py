@@ -128,6 +128,17 @@ class ToolCallTrace(BaseModel):
     tool_output: str
 
 
+def _trace_payload(trace: list[ToolCallTrace]) -> list[dict[str, Any]]:
+    """把 Pydantic 轨迹转成可 JSON 序列化的 dict 列表。
+
+    SSE 端点的 done 事件用的是裸 json.dumps，标准库不认识 BaseModel：直接把
+    ToolCallTrace 塞进去会抛 TypeError，把整个流打断，前端收不到 done 事件
+    （session_id / blocked / 最终 reply 全部丢失），还会在 sse_starlette 的
+    task group 里冒成 ExceptionGroup。统一走这里转换，避免两处漏改。
+    """
+    return [t.model_dump() for t in trace]
+
+
 class ChatResponse(BaseModel):
     reply: str
     tool_calls: list[ToolCallTrace]
@@ -631,7 +642,10 @@ async def chat_stream(
         trace: list[ToolCallTrace] = []
         # 工具完整返回，供约束校验推导上下文（trace 里只有 200 字摘要）
         tool_results: list[tuple[str, str]] = []
-        pending_calls = {}
+        # 以工具调用的 run_id 为 key（退化为工具名），而不是工具名：
+        # 同名工具被并发调用时（模型一轮里同时发两个 query_order），用名字做
+        # key 会让第二个 start 覆盖第一个的 args，造成轨迹错配/丢失。
+        pending_calls: dict[str, dict[str, Any]] = {}
         # #14：区分"中间 ReAct 轮"和"最终轮"。
         # on_chat_model_stream 对*每个*模型调用都会吐 token，多轮 ReAct 下
         # 中间轮若先吐文本再决定调工具，这些文本不该并进最终回复。
@@ -682,7 +696,7 @@ async def chat_stream(
                 elif kind == "on_tool_start":
                     name = event["name"]
                     args = event["data"].get("input", {})
-                    pending_calls[name] = {"name": name, "args": args}
+                    pending_calls[str(event.get("run_id") or name)] = {"name": name, "args": args}
                     yield {
                         "event": "message",
                         "data": json.dumps(
@@ -722,15 +736,15 @@ async def chat_stream(
                                 ],
                             },
                         )
-                    if name in pending_calls:
+                    _call = pending_calls.pop(str(event.get("run_id") or name), None)
+                    if _call is not None:
                         trace.append(
                             ToolCallTrace(
                                 tool_name=name,
-                                tool_input=pending_calls[name]["args"],
+                                tool_input=_call["args"],
                                 tool_output=full_output[:200],
                             )
                         )
-                        del pending_calls[name]
                     yield {
                         "event": "message",
                         "data": json.dumps(
@@ -770,7 +784,7 @@ async def chat_stream(
                         "type": "done",
                         "data": {
                             "session_id": session_id,
-                            "tool_calls": trace,
+                            "tool_calls": _trace_payload(trace),
                             "intent": intent,
                             "reply": final_reply,
                             "blocked": blocked,
@@ -783,11 +797,11 @@ async def chat_stream(
 
         except Exception as e:
             # Cleanup pending tool calls to prevent frontend hang
-            for _tc_name in list(pending_calls):
+            for _call in pending_calls.values():
                 trace.append(
                     ToolCallTrace(
-                        tool_name=_tc_name,
-                        tool_input=pending_calls[_tc_name]["args"],
+                        tool_name=str(_call["name"]),
+                        tool_input=_call["args"],
                         tool_output="[stream error]",
                     )
                 )
@@ -799,7 +813,7 @@ async def chat_stream(
                         "type": "done",
                         "data": {
                             "session_id": session_id,
-                            "tool_calls": trace,
+                            "tool_calls": _trace_payload(trace),
                             "intent": intent,
                             # 出错时把已生成的部分文本回传，前端不会停在"光标常驻"状态
                             "reply": final_reply,
@@ -809,6 +823,9 @@ async def chat_stream(
                         },
                     },
                     ensure_ascii=False,
+                    # 兜底：异常路径本身绝不能再抛（否则 done 事件发不出去，
+                    # 整个 SSE 变成 ExceptionGroup），实在遇到非预期类型就降级成 str。
+                    default=str,
                 ),
             }
             yield {

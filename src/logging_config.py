@@ -64,7 +64,17 @@ def setup_logging(log_dir: str = "logs", level: str = "INFO") -> None:
 
     # 静默第三方噪声：这些库在生产环境会输出大量 DEBUG 信息，
     # 但对排查业务问题帮助不大。
-    for noisy in ["uvicorn.access", "chromadb", "httpx", "openai", "httpcore"]:
+    # asyncio / sse_starlette 在 dev（log_level=debug）下会逐 chunk 打印
+    # 「Using proactor: IocpProactor」和每个 SSE 数据块，把业务日志淹没。
+    for noisy in [
+        "uvicorn.access",
+        "chromadb",
+        "httpx",
+        "openai",
+        "httpcore",
+        "asyncio",
+        "sse_starlette",
+    ]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     logging.getLogger(__name__).info(

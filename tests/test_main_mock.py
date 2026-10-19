@@ -13,6 +13,7 @@
 由于 main.py 使用 from auth import get_current_user，需通过 FastAPI dependency_overrides 覆盖认证依赖。
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -901,3 +902,146 @@ class TestChatStreamDoneEvent:
         assert '"blocked": true' in body
         assert app_module.BLOCKED_REPLY in body
         assert '"ask_for_password_or_ssn"' in body
+
+
+class TestChatStreamToolCallTrace:
+    """工具调用轨迹必须能进 done 事件。
+
+    回归用例：done 事件里的 tool_calls 是 list[ToolCallTrace]（Pydantic 模型），
+    之前直接塞进裸 json.dumps 会抛 TypeError，成功路径和异常路径各炸一次，
+    整个 SSE 变成 ExceptionGroup，前端永远收不到 done（session_id / blocked /
+    最终 reply 全丢）。既有流式测试没覆盖到，是因为它们不吐工具事件，trace 一直是
+    空列表，序列化恰好不报错。
+    """
+
+    @staticmethod
+    def _fake_stream(*events):
+        async def fake_stream(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return fake_stream()
+
+    @staticmethod
+    def _parse_sse(text: str) -> list[dict]:
+        """解析 SSE：每个 data: 行都必须是合法 JSON，否则这里直接抛。"""
+        parsed = []
+        for line in text.splitlines():
+            if line.startswith("data: "):
+                parsed.append(json.loads(line[len("data: ") :]))
+        return parsed
+
+    def test_done_carries_tool_calls(self, client):
+        agent = MagicMock()
+
+        class _Out:
+            tool_calls = None
+
+        agent.astream_events = MagicMock(
+            return_value=self._fake_stream(
+                {
+                    "event": "on_tool_start",
+                    "name": "query_order",
+                    "run_id": "tool-1",
+                    "data": {"input": {"order_id": "12345"}},
+                },
+                {
+                    "event": "on_tool_end",
+                    "name": "query_order",
+                    "run_id": "tool-1",
+                    "data": {"output": "订单 12345：已发货"},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "run_id": "r1",
+                    "data": {"chunk": MagicMock(content="已为您查询到订单 12345，当前已发货。")},
+                },
+                {"event": "on_chat_model_end", "run_id": "r1", "data": {"output": _Out()}},
+            )
+        )
+
+        mock_db = _patch_db_and_intent()
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="query_order")
+            response = client.post(
+                "/chat_stream", json={"message": "查订单 12345"}, headers=_auth_headers()
+            )
+
+        assert response.status_code == 200
+        events = self._parse_sse(response.text)
+        done = [e for e in events if e.get("type") == "done"]
+        assert len(done) == 1, f"done 事件缺失，流被中断：{response.text[-500:]}"
+        payload = done[0]["data"]
+        assert payload.get("error") is not True
+        assert payload["session_id"]
+        assert payload["tool_calls"] == [
+            {
+                "tool_name": "query_order",
+                "tool_input": {"order_id": "12345"},
+                "tool_output": "订单 12345：已发货",
+            }
+        ]
+
+    def test_parallel_same_name_tool_calls_keep_own_args(self, client):
+        """同名工具并发调用不能互相覆盖：轨迹要两条，各自的入参不能串。"""
+        agent = MagicMock()
+
+        class _Out:
+            tool_calls = None
+
+        agent.astream_events = MagicMock(
+            return_value=self._fake_stream(
+                {
+                    "event": "on_tool_start",
+                    "name": "query_order",
+                    "run_id": "tool-1",
+                    "data": {"input": {"order_id": "111"}},
+                },
+                {
+                    "event": "on_tool_start",
+                    "name": "query_order",
+                    "run_id": "tool-2",
+                    "data": {"input": {"order_id": "222"}},
+                },
+                {
+                    "event": "on_tool_end",
+                    "name": "query_order",
+                    "run_id": "tool-1",
+                    "data": {"output": "订单 111：已发货"},
+                },
+                {
+                    "event": "on_tool_end",
+                    "name": "query_order",
+                    "run_id": "tool-2",
+                    "data": {"output": "订单 222：待发货"},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "run_id": "r1",
+                    "data": {"chunk": MagicMock(content="两个订单都查到了。")},
+                },
+                {"event": "on_chat_model_end", "run_id": "r1", "data": {"output": _Out()}},
+            )
+        )
+
+        mock_db = _patch_db_and_intent()
+        with (
+            patch("src.api.app.db", mock_db),
+            patch("src.api.app.classify_intent") as mock_classify,
+            patch("src.api.app.get_agent", return_value=agent),
+        ):
+            mock_classify.return_value = MagicMock(intent="query_order")
+            response = client.post(
+                "/chat_stream", json={"message": "查订单 111 和 222"}, headers=_auth_headers()
+            )
+
+        events = self._parse_sse(response.text)
+        payload = [e for e in events if e.get("type") == "done"][0]["data"]
+        assert [t["tool_input"] for t in payload["tool_calls"]] == [
+            {"order_id": "111"},
+            {"order_id": "222"},
+        ]

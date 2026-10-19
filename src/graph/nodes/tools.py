@@ -155,7 +155,8 @@ async def create_ticket(order_id: str, reason: str) -> str:
         elapsed_ms = (time.monotonic() - start) * 1000
         AGENT_TOOL_CALLS_TOTAL.labels(tool_name="create_ticket", result="success").inc()
         logger.info(
-            "工具调用结束: create_ticket（工单 %(ticket_id)s）",
+            "工具调用结束: create_ticket（工单 %s）",
+            ticket.ticket_id,
             extra={"ticket_id": ticket.ticket_id, "elapsed_ms": round(elapsed_ms, 1)},
         )
         return _dumps(result)
